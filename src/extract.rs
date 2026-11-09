@@ -63,7 +63,15 @@ pub fn long_path(p: &Path) -> PathBuf {
 
 /// Sets the copy's times from the entry's.
 pub fn set_times(dest: &Path, times: &Timestamps) {
-    let Ok(f) = File::options().write(true).open(dest) else {
+    let mut opts = File::options();
+    opts.write(true);
+    #[cfg(windows)]
+    {
+        // FILE_FLAG_BACKUP_SEMANTICS: directories open for a handle too.
+        use std::os::windows::fs::OpenOptionsExt;
+        opts.custom_flags(0x0200_0000);
+    }
+    let Ok(f) = opts.open(dest) else {
         diag::info(code::EXTRACT_TIMES, dest.display().to_string());
         return;
     };
