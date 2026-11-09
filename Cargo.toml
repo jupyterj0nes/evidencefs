@@ -2,7 +2,7 @@
 name = "evidencefs"
 version = "0.1.0"
 edition = "2021"
-description = "One reader for forensic evidence: disk images (E01, raw, VHD/VHDX, VMDK), NTFS, ext4 and XFS volumes, Volume Shadow Copies, triage packages and archives, walked as one tree. Shared by the c00pr DFIR tools."
+description = "One reader for forensic evidence: disk images (E01, raw, split raw, VHD/VHDX, VMDK), NTFS, ext4 and XFS volumes, LVM, Volume Shadow Copies, triage packages, folders and archives, walked as one tree. Shared by the c00pr DFIR tools."
 authors = ["Tono Diaz (@jupyterj0nes)"]
 repository = "https://github.com/jupyterj0nes/evidencefs"
 license = "AGPL-3.0-only"
@@ -11,3 +11,15 @@ categories = ["filesystem", "parser-implementations"]
 readme = "README.md"
 
 [dependencies]
+ewf = "0.4"
+ntfs = "0.4"
+ext4-view = { version = "1", features = ["std"] }
+rust-fs-xfs = { version = "0.14", default-features = false }
+rust-fs-core = { version = "0.3", default-features = false }
+lvm2 = "0.0.3"
+vshadow = "0.2"
+flate2 = "1"
+zip = { version = "9", default-features = false, features = ["deflate", "bzip2", "zstd", "lzma", "time"] }
+tar = "0.4"
+
+[dev-dependencies]

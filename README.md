@@ -1,32 +1,73 @@
 # evidencefs
 
-One reader for forensic evidence, in pure Rust. A disk image (E01, raw, VHD/VHDX, VMDK), a
-mounted volume, a Volume Shadow Copy, a triage package (KAPE, Velociraptor) or an archive comes
-in; one tree of files with their metadata comes out, read the same way by every tool.
+One reader for forensic evidence, in pure Rust. A disk image (E01, raw, split raw,
+VHD/VHDX, VMDK), a mounted volume, a Volume Shadow Copy, a triage package (KAPE,
+Velociraptor, CyLR, UAC, Cortex XDR), a zip or tar archive, or a single file comes in; one
+list of **mounts** comes out, each a read-only file system walked, searched and extracted
+the same way, with the original timestamps and stable diagnostic codes for everything that
+was skipped or decided along the way.
 
 It is the shared evidence layer of [agentc00pr](https://github.com/jupyterj0nes/agentc00pr),
 [hivedump](https://github.com/jupyterj0nes/hivedump), [webfoot](https://github.com/jupyterj0nes/webfoot)
-and [exfilter](https://github.com/jupyterj0nes/exfilter), and the common home of the image reading
-that [masstin](https://github.com/jupyterj0nes/masstin), [faramir](https://github.com/jupyterj0nes/faramir),
+and [exfilter](https://github.com/jupyterj0nes/exfilter), and the common home of the image
+reading that [masstin](https://github.com/jupyterj0nes/masstin), [faramir](https://github.com/jupyterj0nes/faramir),
 [caarea](https://github.com/jupyterj0nes/caarea) and [allymacb](https://github.com/jupyterj0nes/allymacb)
-each carry today.
+each carry today (the VHD, VHDX and VMDK readers and the partition walk are ported from
+faramir and masstin).
+
+```rust
+use evidencefs::{Evidence, OpenOptions, WalkOptions, WalkStep};
+
+let ev = Evidence::open("disk.E01".as_ref(), &OpenOptions::default())?;
+println!("{}", ev.describe());
+// disk.E01: image (E01), 59.9 GB (3 segment(s)), host WS01
+//   partition 0: NTFS at 0x100000 (99.0 MB, gpt, "System Reserved")
+//   partition 1: NTFS at 0x6500000 (59.8 GB, gpt, "Basic data partition")
+//   mount partition_1: NTFS "OS" [...] [windows root /]
+//   mount partition_1_vss_0: NTFS "OS" [... vss:0:2026-10-29 01:57:43] [windows root /]
+
+for found in ev.find(&["**/config/SYSTEM", "Users/*/NTUSER.DAT", "*.evtx"], &WalkOptions::default())? {
+    let mount = &ev.mounts[found.mount];
+    let mut out = Vec::new();
+    mount.fs.copy_to(&found.entry.path, None, &mut out, None)?;
+    println!("{} {} bytes {}", mount.source_path(&found.entry.path), out.len(), found.entry.times.macb());
+}
+```
+
+## What it reads
+
+| Layer | Formats | Notes |
+|---|---|---|
+| Images | EWF (E01/Ex01/L01, segments found by name), raw (`.dd/.raw/.img/.bin`), split raw (`.001`...), VHD fixed and dynamic, VHDX fixed and dynamic, VMDK (descriptor, monolithic sparse and flat, split, streamOptimized) | The format is decided by extension, then by signature when the extension lies. Differencing VHD/VHDX and VMDK snapshot deltas are refused with a code that says to merge them. |
+| Partitions | MBR with extended partition chains, GPT (primary or backup header, 512 or 4 KB sectors), whole-image volumes, common offsets when the table is gone | Every volume is sniffed by signature: NTFS, BitLocker, ext2/3/4, XFS, btrfs, F2FS, swap, LVM2, LUKS, FAT, exFAT, ReFS, APFS, HFS+. Encrypted and unsupported volumes are listed, never silently dropped. |
+| Containers | LVM2 physical volumes (linear logical volumes read in place), Volume Shadow Copies (every store of an NTFS volume, each mounted as the volume looked at snapshot time) | Striped or thin LVs are reported. The VSS reader comes from [vshadow](https://github.com/jupyterj0nes/vshadow-rs). |
+| File systems | NTFS (`$UpCase` lookups, `$STANDARD_INFORMATION` times, alternate data streams, reparse points described), ext2/3/4, XFS, a plain folder, a zip read in place | Symbolic links are listed with their target and never followed. The `$`-metafiles are ordinary entries. |
+| Archives | zip (in place), tar / tar.gz / tgz (unpacked once into a temporary folder that lives as long as the `Evidence`) | Archives inside folders and archives are opened as nested mounts, two levels deep by default. 7z, RAR, bz2 and xz are recognised and refused with a code. |
+| Triage | KAPE, Velociraptor (`C%3A` decoded), CyLR, UAC, Cortex XDR, generic Windows or Linux trees | The collector and the host name from the package name, the Windows and Linux roots inside (`C/Windows/System32/config`, `etc/hostname`). |
+
+## The API in one screen
+
+- `Evidence::open(path, &OpenOptions)` → `Evidence { kind, image, volumes, mounts, triage, single_file }`; `describe()`, `hostname()`, `walk_all()`, `find(&globs)`, `temp_path()`.
+- `Mount { label, fs: Box<dyn FileSystem>, source, roots }`; `source_path(path)` gives `partition_0_vss_1/Windows/...`, the prefix the c00pr timelines put in `source_file`.
+- `trait FileSystem`: `metadata(path)`, `read_dir(path)` (sorted), `copy_to(path, stream, sink, progress)` (streams any size), `read(path, stream, limit)`, `read_to_string`, `exists`, `kind`, `label`, `size`.
+- `Entry { path, name, kind, size, times: Timestamps { created, modified, accessed, changed }, id, streams, link_target }`; `Timestamp` prints as `YYYY-MM-DDTHH:MM:SS.ffffffZ` and converts from FILETIME, Unix, WebKit, Firefox and Cocoa epochs.
+- `fs::walk(fs, root, &WalkOptions, |entry| WalkStep::{Continue, SkipDir, Stop})` pre-order, names in order, depth and count limits; `fs::find` with `Glob` (`*.evtx`, `**/config/SYSTEM`, `Users/*/NTUSER.DAT`, case-insensitive).
+- `extract::extract_file` / `extract_tree`: copies with the original times, Windows-safe names, long-path prefix, alternate data streams as `<name>__<stream>`, progress, a manifest of renamed entries.
+- `source::open_image`, `SharedReader` (one image, many consumers, views per partition), `volume::list_volumes`, `volume::vss::list_snapshots`, `volume::lvm::PhysicalVolume`: the layers underneath, usable alone.
+
+Paths are always `/`-separated with a leading `/`, whatever the source used; NTFS, zip and folder lookups ignore case, ext and XFS do not.
+
+## Diagnostics
+
+Every failure, skip and decision carries a stable code `EF###_NAME` with a help text that says what it means and what to do; [docs/codes.md](docs/codes.md) lists all of them by range (images 000-199, archives 200-249, partitions 250-299, LVM 300-349, VSS 350-399, NTFS 400-449, ext 450-499, XFS 500-549, folders and zips 550-599, walking 600-649, extraction 650-699, triage 700-749, time 750-799). Codes are recorded in a per-thread sink (`diag::drain()`, `diag::has(code)`), echoed to stderr unless `diag::set_quiet(true)`, and the tools print them with `--codes` / `--explain`.
+
+## Tests
+
+`cargo test --release` runs the unit tests over synthetic images (MBR and GPT tables, EBR chains, VHD/VHDX/VMDK layouts built byte by byte, zips, tars with escaping members) and, when `D:\evidence` is present, the lab data: a VHD with an NTFS volume and a shadow copy, an ext4 image, a tgz and a zip triage, a KAPE-style folder. Two walks of the same evidence must give the same entries.
 
 ## Status
 
-Skeleton. The API and the first readers are being laid down; nothing here is usable yet.
-
-## Planned
-
-- `Source`: anything addressed by offset (a file, a raw device, an EWF segment set, a VHD/VHDX,
-  a VMDK), guarded against stalls the way [blockcarve](https://github.com/jupyterj0nes/blockcarve) does.
-- `Volume`: partition tables (MBR, GPT), LVM, Volume Shadow Copies via
-  [vshadow](https://github.com/jupyterj0nes/vshadow-rs).
-- `FileSystem`: NTFS (with alternate data streams and the `$MFT` resident data), ext4, XFS,
-  FAT; a triage package or a plain folder as a file system too.
-- `Walk`: one iterator over everything, with the path, the timestamps, the size and a reader
-  for each file; a `find` by name, extension, path pattern or signature.
-- `Extract`: copy a file or a subtree out, preserving names and timestamps, with a progress
-  callback.
+0.1: everything above works and is tested; not yet: FAT/exFAT, APFS/HFS+, btrfs, deleted-file recovery (that is allymacb's and blockcarve's job), live devices, differencing disks. `#![forbid(unsafe_code)]`.
 
 ## License
 
