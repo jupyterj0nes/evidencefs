@@ -1,0 +1,13 @@
+[package]
+name = "evidencefs"
+version = "0.1.0"
+edition = "2021"
+description = "One reader for forensic evidence: disk images (E01, raw, VHD/VHDX, VMDK), NTFS, ext4 and XFS volumes, Volume Shadow Copies, triage packages and archives, walked as one tree. Shared by the c00pr DFIR tools."
+authors = ["Tono Diaz (@jupyterj0nes)"]
+repository = "https://github.com/jupyterj0nes/evidencefs"
+license = "AGPL-3.0-only"
+keywords = ["forensics", "dfir", "ntfs", "ewf", "ext4"]
+categories = ["filesystem", "parser-implementations"]
+readme = "README.md"
+
+[dependencies]
