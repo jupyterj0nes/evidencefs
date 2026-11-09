@@ -42,10 +42,10 @@ Every code evidencefs can record, with what it means and what to do about it. Th
 | `EF150_VMDK_OPEN` | the VMDK file could not be opened; check the path and permissions |
 | `EF151_VMDK_READ_HEADER` | the first bytes of the VMDK could not be read; the file is empty or unreadable |
 | `EF152_VMDK_EXTENT_MISSING` | the descriptor names an extent file that is not next to it; only the descriptor was collected, the data file (-flat.vmdk, -sNNN.vmdk) is needed |
-| `EF153_VMDK_EXTENT_FILEPART` | the extent file was found only as an incomplete upload (<name>.filepart) and was used as it is; the disk is incomplete past the uploaded bytes |
+| `EF153_VMDK_EXTENT_FILEPART` | the extent file was found only as an incomplete upload (`<name>.filepart`) and was used as it is; the disk is incomplete past the uploaded bytes |
 | `EF154_VMDK_EXTENT_TYPE` | the descriptor has an extent of a type this reader does not know (not FLAT, VMFS, SPARSE, VMFSSPARSE or ZERO) |
 | `EF155_VMDK_NO_EXTENTS` | the descriptor has no RW/RDONLY/NOACCESS extent lines; it is not a VMDK descriptor or it is truncated |
-| `EF156_VMDK_EXTENT_LINE` | an extent line of the descriptor is malformed (not 'ACCESS SECTORS TYPE "FILE" [OFFSET]'); the descriptor is damaged |
+| `EF156_VMDK_EXTENT_LINE` | an extent line of the descriptor is malformed (not `ACCESS SECTORS TYPE "FILE" [OFFSET]`); the descriptor is damaged |
 | `EF157_VMDK_SPARSE_MAGIC` | a sparse extent has no KDMV magic; the file named as SPARSE is not one |
 | `EF158_VMDK_SPARSE_DAMAGED` | a sparse extent header has values VMware never writes (grain size, table size or capacity); the header is damaged |
 | `EF159_VMDK_GD_AT_END_UNCOMPRESSED` | the grain directory is marked as 'at end of file' but the extent is not streamOptimized; an unsupported layout |
@@ -154,7 +154,7 @@ Every code evidencefs can record, with what it means and what to do about it. Th
 | `EF654_EXTRACT_NAME_CHANGED` | the original name has characters or a form the host file system refuses; the copy carries a sanitised name (the original is in the manifest) |
 | `EF655_EXTRACT_SKIPPED_LARGE` | a file above the size limit was not copied; raise max_bytes or copy it alone |
 | `EF656_EXTRACT_DONE` | an extraction finished: files, bytes, errors |
-| `EF657_EXTRACT_STREAM` | an alternate data stream was written as its own file, named <file>__<stream> |
+| `EF657_EXTRACT_STREAM` | an alternate data stream was written as its own file, named `<file>__<stream>` |
 | `EF658_EXTRACT_LINK_SKIPPED` | a symbolic link or reparse point was not copied; its target is noted |
 | `EF659_EXTRACT_LONG_PATH` | a destination path is longer than 240 characters; the Windows long-path prefix was used |
 | `EF660_EXTRACT_EXISTS` | the destination file already exists and overwrite was not asked; it was left as it was |

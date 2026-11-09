@@ -20,10 +20,10 @@ pub mod code {
         VMDK_OPEN = 150, "the VMDK file could not be opened; check the path and permissions";
         VMDK_READ_HEADER = 151, "the first bytes of the VMDK could not be read; the file is empty or unreadable";
         VMDK_EXTENT_MISSING = 152, "the descriptor names an extent file that is not next to it; only the descriptor was collected, the data file (-flat.vmdk, -sNNN.vmdk) is needed";
-        VMDK_EXTENT_FILEPART = 153, "the extent file was found only as an incomplete upload (<name>.filepart) and was used as it is; the disk is incomplete past the uploaded bytes";
+        VMDK_EXTENT_FILEPART = 153, "the extent file was found only as an incomplete upload (`<name>.filepart`) and was used as it is; the disk is incomplete past the uploaded bytes";
         VMDK_EXTENT_TYPE = 154, "the descriptor has an extent of a type this reader does not know (not FLAT, VMFS, SPARSE, VMFSSPARSE or ZERO)";
         VMDK_NO_EXTENTS = 155, "the descriptor has no RW/RDONLY/NOACCESS extent lines; it is not a VMDK descriptor or it is truncated";
-        VMDK_EXTENT_LINE = 156, "an extent line of the descriptor is malformed (not 'ACCESS SECTORS TYPE \"FILE\" [OFFSET]'); the descriptor is damaged";
+        VMDK_EXTENT_LINE = 156, "an extent line of the descriptor is malformed (not `ACCESS SECTORS TYPE \"FILE\" [OFFSET]`); the descriptor is damaged";
         VMDK_SPARSE_MAGIC = 157, "a sparse extent has no KDMV magic; the file named as SPARSE is not one";
         VMDK_SPARSE_DAMAGED = 158, "a sparse extent header has values VMware never writes (grain size, table size or capacity); the header is damaged";
         VMDK_GD_AT_END_UNCOMPRESSED = 159, "the grain directory is marked as 'at end of file' but the extent is not streamOptimized; an unsupported layout";

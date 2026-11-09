@@ -1,7 +1,7 @@
 //! Diagnostics: stable codes and the sink that collects them.
 //!
 //! Every failure, skip or decision the analyst may need to trace carries a code
-//! `EF###_NAME`. Each module declares its codes with [`codes!`] in a `pub mod code` block,
+//! `EF###_NAME`. Each module declares its codes with the `codes!` macro in a `pub mod code` block,
 //! inside its area's range; [`catalog`] gathers them and a test checks that no number is
 //! used twice.
 //!

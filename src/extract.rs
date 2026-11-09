@@ -18,7 +18,7 @@ pub mod code {
         EXTRACT_NAME_CHANGED = 654, "the original name has characters or a form the host file system refuses; the copy carries a sanitised name (the original is in the manifest)";
         EXTRACT_SKIPPED_LARGE = 655, "a file above the size limit was not copied; raise max_bytes or copy it alone";
         EXTRACT_DONE = 656, "an extraction finished: files, bytes, errors";
-        EXTRACT_STREAM = 657, "an alternate data stream was written as its own file, named <file>__<stream>";
+        EXTRACT_STREAM = 657, "an alternate data stream was written as its own file, named `<file>__<stream>`";
         EXTRACT_LINK_SKIPPED = 658, "a symbolic link or reparse point was not copied; its target is noted";
         EXTRACT_LONG_PATH = 659, "a destination path is longer than 240 characters; the Windows long-path prefix was used";
         EXTRACT_EXISTS = 660, "the destination file already exists and overwrite was not asked; it was left as it was";
