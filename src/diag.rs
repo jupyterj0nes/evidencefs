@@ -15,14 +15,15 @@
 //! | 250-299 | partitions: MBR, GPT, signatures, encryption |
 //! | 300-349 | LVM |
 //! | 350-399 | Volume Shadow Copies |
-//! | 400-449 | NTFS |
-//! | 450-499 | ext2/3/4 |
+//! | 400-449 | NTFS (400-429 volume, 430-449 `$MFT` records and deleted files) |
+//! | 450-499 | ext2/3/4 (450-457 volume, 458-499 journal recovery) |
 //! | 500-549 | XFS |
 //! | 550-599 | plain folders and zip archives as file systems |
 //! | 600-649 | walking and finding |
 //! | 650-699 | extraction |
 //! | 700-749 | triage packages |
 //! | 750-799 | timestamps and decoding |
+//! | 850-899 | carving: signatures found in unallocated space, memory dumps, any bytes |
 //!
 //! The sink is per thread: a worker records into its own while it reads a piece of
 //! evidence, drains it when done and hands the list back, so tests and tools see the
@@ -201,7 +202,10 @@ pub fn catalog() -> Vec<Code> {
     all.extend_from_slice(crate::volume::lvm::code::CODES);
     all.extend_from_slice(crate::volume::vss::code::CODES);
     all.extend_from_slice(crate::fs::ntfs::code::CODES);
+    all.extend_from_slice(crate::fs::mft::code::CODES);
     all.extend_from_slice(crate::fs::ext::code::CODES);
+    all.extend_from_slice(crate::fs::extjournal::code::CODES);
+    all.extend_from_slice(crate::carve::code::CODES);
     all.extend_from_slice(crate::fs::xfs::code::CODES);
     all.extend_from_slice(crate::fs::folder::code::CODES);
     all.extend_from_slice(crate::fs::code::CODES);

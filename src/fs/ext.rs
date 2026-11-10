@@ -1,13 +1,19 @@
 //! ext2/3/4 volumes through the `ext4-view` crate. Symbolic links are described, not
 //! followed; names are bytes on disk and are shown lossily when not UTF-8.
+//!
+//! Deleted files and previous versions come from the journal and directory slack
+//! ([`crate::fs::extjournal`]), listed under `/$DELETED/<inode>/<path>` (a previous
+//! version of a live file under `/$DELETED/<inode>.v<seq>/<path>`).
 
 use std::io::Read;
+use std::sync::{Arc, Mutex};
 
 use ext4_view::{Ext4, Ext4Error};
 
 use crate::diag;
 use crate::error::{Error, Result};
-use crate::fs::{code as fscode, join, normalize, Entry, EntryKind, FileSystem, FsKind, Progress, Sink};
+use crate::fs::extjournal::{self, RecoveredFile, RecoveredKind, Recovery};
+use crate::fs::{code as fscode, deleted_path, is_deleted_root, join, normalize, parse_deleted, Entry, EntryKind, FileSystem, FsKind, Progress, Sink, DELETED_DIR};
 use crate::source::SharedReader;
 use crate::time::{Timestamp, Timestamps};
 
@@ -27,8 +33,10 @@ pub mod code {
 /// An ext2/3/4 volume.
 pub struct ExtFs {
     fs: Ext4,
+    reader: SharedReader,
     label: Option<String>,
     uuid: String,
+    recovery: Mutex<Option<Arc<Recovery>>>,
 }
 
 fn ts(t: ext4_view::Timestamp) -> Timestamp {
@@ -47,16 +55,47 @@ fn map_err(e: Ext4Error, path: &str) -> Error {
 impl ExtFs {
     /// Opens the volume whose first byte is the start of the partition.
     pub fn open(volume: SharedReader, label_for_logs: &str) -> Result<Self> {
+        let reader = volume.clone();
         let fs = Ext4::load(Box::new(volume)).map_err(|e| Error::recorded(code::EXT_OPEN, format!("{label_for_logs}: {e}")))?;
         let label = fs.label().to_str().ok().map(|s| s.trim_end_matches('\0').to_string()).filter(|s| !s.is_empty());
         let uuid = format!("{}", fs.uuid());
         diag::info(code::EXT_OPENED, format!("{label_for_logs}: label {:?}, uuid {uuid}", label.as_deref().unwrap_or("")));
-        Ok(ExtFs { fs, label, uuid })
+        Ok(ExtFs { fs, reader, label, uuid, recovery: Mutex::new(None) })
     }
 
     /// The file system UUID.
     pub fn uuid(&self) -> &str {
         &self.uuid
+    }
+
+    /// The recovery pass (journal and slack), run once and cached.
+    pub fn recovery(&self, progress: Option<Progress<'_>>) -> Result<Arc<Recovery>> {
+        if let Some(r) = self.recovery.lock().ok().and_then(|g| g.clone()) {
+            return Ok(r);
+        }
+        let rec = Arc::new(extjournal::recover(self.reader.clone(), progress)?);
+        if let Ok(mut g) = self.recovery.lock() {
+            *g = Some(rec.clone());
+        }
+        Ok(rec)
+    }
+
+    fn recovered_entry(&self, f: &RecoveredFile) -> Entry {
+        let mut e = Entry::new(&deleted_path(&f.id, &f.path), EntryKind::File);
+        e.id = f.ino as u64;
+        e.size = f.size;
+        e.times = Timestamps { created: f.crtime.map(|t| Timestamp::from_unix(t as i64, 0)), modified: (f.mtime != 0).then(|| Timestamp::from_unix(f.mtime as i64, 0)), accessed: None, changed: None };
+        e.deleted = true;
+        e.recoverable = f.recoverable;
+        e.deleted_at = f.dtime.map(|t| Timestamp::from_unix(t as i64, 0));
+        if f.kind == RecoveredKind::PreviousVersion {
+            e.link_target = Some(format!("previous version of {} ({})", f.path, f.source));
+        }
+        e
+    }
+
+    fn find_recovered<'a>(&self, rec: &'a Recovery, id: &str, path: &str) -> Result<&'a RecoveredFile> {
+        rec.files.iter().find(|f| f.id == id).ok_or_else(|| Error::new(fscode::FS_DELETED_NOT_FOUND, path.to_string()))
     }
 
     fn entry_of(&self, path: &str, meta: &ext4_view::Metadata) -> Entry {
@@ -94,13 +133,38 @@ impl FileSystem for ExtFs {
         self.label.clone()
     }
 
+    fn supports_deleted(&self) -> bool {
+        true
+    }
+
+    fn deleted(&self, progress: Option<Progress<'_>>) -> Result<Vec<Entry>> {
+        let rec = self.recovery(progress)?;
+        Ok(rec.files.iter().map(|f| self.recovered_entry(f)).collect())
+    }
+
     fn metadata(&self, path: &str) -> Result<Entry> {
+        if is_deleted_root(path) {
+            let mut e = Entry::new(&format!("/{DELETED_DIR}"), EntryKind::Dir);
+            e.deleted = true;
+            return Ok(e);
+        }
+        if let Some((id, _)) = parse_deleted(path) {
+            let rec = self.recovery(None)?;
+            return Ok(self.recovered_entry(self.find_recovered(&rec, &id, path)?));
+        }
         let norm = normalize(path);
         let meta = self.fs.symlink_metadata(norm.as_str()).map_err(|e| map_err(e, path))?;
         Ok(self.entry_of(&norm, &meta))
     }
 
     fn read_dir(&self, path: &str) -> Result<Vec<Entry>> {
+        if is_deleted_root(path) {
+            return self.deleted(None);
+        }
+        if parse_deleted(path).is_some() {
+            self.metadata(path)?;
+            return Err(Error::new(fscode::FS_NOT_A_DIR, path.to_string()));
+        }
         let norm = normalize(path);
         let rd = self.fs.read_dir(norm.as_str()).map_err(|e| match e {
             Ext4Error::NotADirectory => Error::new(fscode::FS_NOT_A_DIR, path.to_string()),
@@ -149,6 +213,14 @@ impl FileSystem for ExtFs {
     fn copy_to(&self, path: &str, stream: Option<&str>, sink: Sink<'_>, progress: Option<Progress<'_>>) -> Result<u64> {
         if stream.is_some_and(|s| !s.is_empty()) {
             return Err(Error::new(fscode::FS_STREAM_NOT_FOUND, path.to_string()));
+        }
+        if let Some((id, _)) = parse_deleted(path) {
+            let rec = self.recovery(None)?;
+            let f = self.find_recovered(&rec, &id, path)?;
+            if !f.recoverable {
+                return Err(Error::new(fscode::FS_DELETED_UNRECOVERABLE, format!("{path}: {}", if f.blocks_reused { "blocks reused" } else { "no inode copy with content" })));
+            }
+            return extjournal::stream(self.reader.clone(), f, sink, progress);
         }
         let norm = normalize(path);
         let meta = self.fs.symlink_metadata(norm.as_str()).map_err(|e| map_err(e, path))?;

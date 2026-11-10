@@ -25,6 +25,7 @@
 #![forbid(unsafe_code)]
 
 pub mod archive;
+pub mod carve;
 pub mod diag;
 pub mod error;
 pub mod evidence;
@@ -36,11 +37,12 @@ pub mod triage;
 pub mod volume;
 
 pub use archive::ArchiveKind;
+pub use carve::{CarveKind, CarveOptions, Carved};
 pub use diag::{Code, Diagnostic, Severity};
 pub use error::{Error, Result};
 pub use evidence::{Evidence, EvidenceKind, Found, Mount, MountSource, OpenOptions};
 pub use extract::{extract_file, extract_tree, ExtractOptions, ExtractStats};
-pub use fs::{Entry, EntryKind, FileSystem, FsKind, Glob, Stream, WalkOptions, WalkStats, WalkStep};
+pub use fs::{Entry, EntryKind, FileSystem, FsKind, Glob, Stream, WalkOptions, WalkStats, WalkStep, DELETED_DIR};
 pub use source::{Image, ImageKind, SharedReader};
 pub use time::{Timestamp, Timestamps};
 pub use triage::{TriageInfo, TriageType};

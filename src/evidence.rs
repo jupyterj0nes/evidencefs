@@ -4,7 +4,11 @@
 
 use std::path::{Path, PathBuf};
 
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
+
 use crate::archive::{self, ArchiveKind, TempDir};
+use crate::carve::{self, CarveOptions, CarveStats, Carved};
 use crate::diag;
 use crate::error::{Error, Result};
 use crate::fs::{self, Entry, FileSystem, FsKind, Glob, WalkOptions, WalkStats, WalkStep};
@@ -24,6 +28,8 @@ pub mod code {
         EVIDENCE_NESTED_SKIPPED = 27, "an archive inside the evidence was not opened: nesting limit reached, unsupported format, or it failed to open";
         EVIDENCE_TEMP = 28, "a temporary folder was created for unpacked archives; it is removed when the evidence is closed unless keep_temp was asked";
         EVIDENCE_SINGLE_FILE = 29, "the evidence is a single file; its folder is mounted and the file is the only entry of interest";
+        EVIDENCE_DELETED_LISTED = 30, "the deleted entries of every mount that keeps them were listed: mounts asked, entries found";
+        EVIDENCE_CARVE_SOURCE = 31, "what the carve scan reads: the whole image, or the single file given as evidence";
     }
 }
 
@@ -508,6 +514,70 @@ impl Evidence {
     /// The temporary folder in use, if any.
     pub fn temp_path(&self) -> Option<&Path> {
         self.temp.as_ref().map(|t| t.path())
+    }
+
+    /// The deleted entries of one mount (empty for a mount that keeps none; an error only
+    /// when the scan itself failed).
+    pub fn deleted(&self, mount: usize, progress: Option<&mut dyn FnMut(u64, u64)>) -> Result<Vec<Entry>> {
+        let m = self.mounts.get(mount).ok_or_else(|| Error::new(code::EVIDENCE_NO_MOUNTS, format!("mount {mount}")))?;
+        if !m.fs.supports_deleted() {
+            diag::info(fs::code::FS_DELETED_UNSUPPORTED, m.label.clone());
+            return Ok(Vec::new());
+        }
+        m.fs.deleted(progress)
+    }
+
+    /// The deleted entries of every mount that keeps them, as `(mount index, entry)`.
+    pub fn deleted_all(&self, mut progress: Option<&mut dyn FnMut(u64, u64)>) -> Vec<(usize, Entry)> {
+        let mut out = Vec::new();
+        let mut asked = 0;
+        for (i, m) in self.mounts.iter().enumerate() {
+            if !m.fs.supports_deleted() {
+                continue;
+            }
+            asked += 1;
+            let mut relay = |a: u64, b: u64| {
+                if let Some(p) = progress.as_deref_mut() {
+                    p(a, b);
+                }
+            };
+            match m.fs.deleted(Some(&mut relay)) {
+                Ok(list) => out.extend(list.into_iter().map(|e| (i, e))),
+                Err(e) => {
+                    diag::warn(e.code, format!("{}: {}", m.label, e.msg));
+                }
+            }
+        }
+        diag::info(code::EVIDENCE_DELETED_LISTED, format!("{asked} mount(s), {} entries", out.len()));
+        out
+    }
+
+    /// The bytes a carve scan reads: the whole image, or the single file given as
+    /// evidence. `None` for folders and archives.
+    pub fn carve_reader(&self) -> Option<(crate::source::SharedReader, String)> {
+        if let Some(img) = &self.image {
+            diag::info(code::EVIDENCE_CARVE_SOURCE, format!("image {} ({} bytes)", img.path.display(), img.size));
+            return Some((img.reader.clone(), img.path.display().to_string()));
+        }
+        if self.kind == EvidenceKind::File {
+            let f = std::fs::File::open(&self.path).ok()?;
+            let r = crate::source::SharedReader::new(Box::new(f)).ok()?;
+            diag::info(code::EVIDENCE_CARVE_SOURCE, format!("file {} ({} bytes)", self.path.display(), r.len()));
+            return Some((r, self.path.display().to_string()));
+        }
+        None
+    }
+
+    /// Carves the image (or the single file) for the kinds in `opts`.
+    pub fn carve(&self, opts: &CarveOptions, progress: Option<&mut dyn FnMut(u64, u64)>, cancel: Option<Arc<AtomicBool>>) -> Result<(Vec<Carved>, CarveStats)> {
+        let (reader, _) = self.carve_reader().ok_or_else(|| Error::recorded(carve::code::CARVE_UNSUPPORTED_SOURCE, self.kind.label()))?;
+        carve::scan(&reader, opts, progress, cancel)
+    }
+
+    /// Streams a carved item found by [`Evidence::carve`].
+    pub fn carve_read(&self, item: &Carved, sink: &mut dyn std::io::Write, progress: Option<&mut dyn FnMut(u64, u64)>) -> Result<u64> {
+        let (reader, _) = self.carve_reader().ok_or_else(|| Error::recorded(carve::code::CARVE_UNSUPPORTED_SOURCE, self.kind.label()))?;
+        carve::read(&reader, item, sink, progress)
     }
 }
 

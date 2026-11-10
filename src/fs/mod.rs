@@ -3,7 +3,9 @@
 //! used, so a tool asks for `/Windows/System32/config/SYSTEM` the same way everywhere.
 
 pub mod ext;
+pub mod extjournal;
 pub mod folder;
+pub mod mft;
 pub mod ntfs;
 pub mod xfs;
 pub mod zipfs;
@@ -31,6 +33,10 @@ pub mod code {
         FS_OPENED = 612, "a file system was opened; its kind, label and size";
         FS_PATH_ESCAPES = 613, "a path tries to climb above the root with '..'; it was refused";
         WALK_STOPPED = 614, "the caller stopped the walk before the end";
+        FS_DELETED_UNSUPPORTED = 615, "this file system keeps no trace of deleted files that the reader can list (folders, zips, XFS); NTFS and ext volumes do, open the image instead of a copied tree";
+        FS_DELETED_NOT_FOUND = 616, "no deleted entry has that record or inode number under $DELETED; list $DELETED to see the ones there are";
+        FS_DELETED_UNRECOVERABLE = 617, "the deleted entry's metadata is listed but its content cannot be read back: a directory, clusters reused or unknown, compressed data, or a bare $MFT without the volume";
+        FS_DELETED_LISTED = 618, "the deleted entries of a file system were listed: how many, how many recoverable";
     }
 }
 
@@ -96,8 +102,14 @@ pub struct Entry {
     pub streams: Vec<Stream>,
     /// Target of a symbolic link, when known.
     pub link_target: Option<String>,
-    /// Set by sources that know the entry is deleted (reserved; `false` today).
+    /// The entry is a deleted file or directory recovered from file system metadata
+    /// (an `$MFT` record not in use, an ext4 journal copy); its `path` starts with
+    /// [`DELETED_DIR`].
     pub deleted: bool,
+    /// A deleted entry whose content can still be read back through `copy_to`.
+    pub recoverable: bool,
+    /// When the entry was deleted, where the file system records it (ext4 `dtime`).
+    pub deleted_at: Option<crate::time::Timestamp>,
 }
 
 impl Entry {
@@ -105,7 +117,7 @@ impl Entry {
     pub fn new(path: &str, kind: EntryKind) -> Self {
         let path = normalize(path);
         let name = path.rsplit('/').next().unwrap_or("").to_string();
-        Entry { path, name, kind, size: 0, times: Timestamps::default(), id: 0, streams: Vec::new(), link_target: None, deleted: false }
+        Entry { path, name, kind, size: 0, times: Timestamps::default(), id: 0, streams: Vec::new(), link_target: None, deleted: false, recoverable: false, deleted_at: None }
     }
 
     /// Is it a directory?
@@ -144,6 +156,39 @@ impl Entry {
             self.path.matches('/').count()
         }
     }
+}
+
+/// The virtual folder deleted entries live under: `/$DELETED/<id>/<original path>`,
+/// where `<id>` is the `$MFT` record number or the inode (with `.v<seq>` for an earlier
+/// version of a file that still exists). It is never listed by `read_dir("/")`; ask for it.
+pub const DELETED_DIR: &str = "$DELETED";
+
+/// Builds the path of a deleted entry: `/$DELETED/<id><original path>`.
+pub fn deleted_path(id: &str, original: &str) -> String {
+    let orig = normalize(original);
+    if orig == "/" {
+        format!("/{DELETED_DIR}/{id}")
+    } else {
+        format!("/{DELETED_DIR}/{id}{orig}")
+    }
+}
+
+/// Splits a `$DELETED` path into `(id, original path)`; `None` for any other path.
+pub fn parse_deleted(path: &str) -> Option<(String, String)> {
+    let norm = normalize(path);
+    let parts = components(&norm);
+    if parts.len() < 2 || !parts[0].eq_ignore_ascii_case(DELETED_DIR) {
+        return None;
+    }
+    let rest = if parts.len() > 2 { format!("/{}", parts[2..].join("/")) } else { "/".to_string() };
+    Some((parts[1].to_string(), rest))
+}
+
+/// Is the path the `$DELETED` folder itself?
+pub fn is_deleted_root(path: &str) -> bool {
+    let norm = normalize(path);
+    let parts = components(&norm);
+    parts.len() == 1 && parts[0].eq_ignore_ascii_case(DELETED_DIR)
 }
 
 /// `/`-separated, leading `/`, no trailing `/` (except the root), `.` and empty components
@@ -254,6 +299,20 @@ pub trait FileSystem {
     /// Does the path exist?
     fn exists(&self, path: &str) -> bool {
         self.metadata(path).is_ok()
+    }
+
+    /// Can this file system list deleted entries?
+    fn supports_deleted(&self) -> bool {
+        false
+    }
+
+    /// The deleted entries the metadata still describes, each with a path under
+    /// [`DELETED_DIR`] that `metadata`, `copy_to` and `read` accept. The first call does
+    /// the work (a scan of the `$MFT`, of the ext4 journal); `progress` gets bytes read
+    /// and total. Sorted by id.
+    fn deleted(&self, progress: Option<Progress<'_>>) -> Result<Vec<Entry>> {
+        let _ = progress;
+        Err(Error::new(code::FS_DELETED_UNSUPPORTED, self.kind().label().to_string()))
     }
 }
 
@@ -529,6 +588,20 @@ mod tests {
         crate::diag::set_quiet(true);
         assert_eq!(Glob::new("  ").unwrap_err().code, code::WALK_PATTERN_INVALID);
         assert_eq!(Glob::new("/").unwrap_err().code, code::WALK_PATTERN_INVALID);
+    }
+
+    #[test]
+    fn deleted_paths_build_and_parse() {
+        assert_eq!(deleted_path("1234", "/Users/bob/x.txt"), "/$DELETED/1234/Users/bob/x.txt");
+        assert_eq!(deleted_path("77.v3", "/"), "/$DELETED/77.v3");
+        assert_eq!(parse_deleted("/$DELETED/1234/Users/bob/x.txt"), Some(("1234".to_string(), "/Users/bob/x.txt".to_string())));
+        assert_eq!(parse_deleted("$deleted/9"), Some(("9".to_string(), "/".to_string())));
+        assert_eq!(parse_deleted("/$DELETED"), None);
+        assert_eq!(parse_deleted("/Users/$DELETED/1"), None);
+        assert!(is_deleted_root("/$DELETED") && is_deleted_root("$DELETED/") && !is_deleted_root("/$DELETED/1") && !is_deleted_root("/"));
+        let e = Entry::new(&deleted_path("5", "/a/b.txt"), EntryKind::File);
+        assert_eq!(e.name, "b.txt");
+        assert!(!e.deleted && !e.recoverable, "flags are the source's to set");
     }
 
     #[test]

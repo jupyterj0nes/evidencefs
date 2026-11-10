@@ -2,9 +2,14 @@
 //! table, `$STANDARD_INFORMATION` times, alternate data streams listed and readable,
 //! reparse points described but never followed. The `$`-files (`$MFT`, `$LogFile`,
 //! `$Extend/$UsnJrnl`) are ordinary entries: a tool that wants them asks for them.
+//!
+//! Deleted files come from a scan of the `$MFT` ([`crate::fs::mft`]): every record not
+//! in use that still has a name is listed under `/$DELETED/<record>/<path>` with its
+//! times, size and streams, and its content is streamed from the old data runs when they
+//! are plain (not compressed) and the record has no attribute list.
 
 use std::io::Read;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use ntfs::indexes::NtfsFileNameIndex;
 use ntfs::structured_values::{NtfsFileAttributeFlags, NtfsFileNamespace, NtfsVolumeName};
@@ -12,7 +17,8 @@ use ntfs::{Ntfs, NtfsAttributeType, NtfsFile};
 
 use crate::diag;
 use crate::error::{Error, Result};
-use crate::fs::{code as fscode, components, join, normalize, Entry, EntryKind, FileSystem, FsKind, Progress, Sink, Stream};
+use crate::fs::mft::{self, Deleted};
+use crate::fs::{code as fscode, components, deleted_path, is_deleted_root, join, normalize, parse_deleted, Entry, EntryKind, FileSystem, FsKind, Progress, Sink, Stream, DELETED_DIR};
 use crate::source::SharedReader;
 use crate::time::{Timestamp, Timestamps};
 
@@ -30,6 +36,10 @@ pub mod code {
         NTFS_OPENED = 409, "an NTFS volume was opened: label, serial number, cluster size and size";
         NTFS_NAME_LOSSY = 410, "a file name has unpaired UTF-16 surrogates; it is shown with replacement characters";
         NTFS_DATA_RUN = 411, "reading a file's data failed part-way (a bad data run or a read past the volume); the bytes read so far are kept";
+        NTFS_MFT_STREAM = 412, "the $MFT's own data stream (record 0) could not be opened; deleted files cannot be listed on this volume";
+        NTFS_DELETED_LISTED = 413, "the deleted entries of the volume were listed from the $MFT: how many, how many with content still readable";
+        NTFS_DELETED_READ = 414, "reading a deleted file's clusters failed; the run points outside the volume or the image is truncated there, the bytes read so far are kept";
+        NTFS_DELETED_RECORD = 415, "the $DELETED id is not a record number; use the number shown in the listing (`/$DELETED/1234/...`)";
     }
 }
 
@@ -39,6 +49,8 @@ pub struct NtfsFs {
     ntfs: Ntfs,
     label: Option<String>,
     size: u64,
+    /// The deleted records, once scanned.
+    deleted: Mutex<Option<Arc<Vec<Deleted>>>>,
 }
 
 const DOS_ONLY: Option<NtfsFileNamespace> = Some(NtfsFileNamespace::Dos);
@@ -75,7 +87,68 @@ impl NtfsFs {
         // Make sure the root is readable before promising anything.
         ntfs.root_directory(&mut r).map_err(|e| Error::recorded(code::NTFS_ROOT, format!("{label_for_logs}: {e}")))?;
         diag::info(code::NTFS_OPENED, format!("{label_for_logs}: label {:?}, serial {:016x}, cluster {} bytes, {}", label.as_deref().unwrap_or(""), ntfs.serial_number(), ntfs.cluster_size(), crate::volume::human_size(size)));
-        Ok(NtfsFs { reader: Mutex::new(volume), ntfs, label, size })
+        Ok(NtfsFs { reader: Mutex::new(volume), ntfs, label, size, deleted: Mutex::new(None) })
+    }
+
+    /// Size of a `FILE` record.
+    pub fn record_size(&self) -> u32 {
+        self.ntfs.file_record_size()
+    }
+
+    /// The deleted records of the volume (scanned once, then cached).
+    fn deleted_list(&self, r: &mut SharedReader, progress: Option<Progress<'_>>) -> Result<Arc<Vec<Deleted>>> {
+        if let Some(list) = self.deleted.lock().ok().and_then(|g| g.clone()) {
+            return Ok(list);
+        }
+        let mft = self.ntfs.file(r, 0).map_err(|e| Error::recorded(code::NTFS_MFT_STREAM, format!("record 0: {e}")))?;
+        let item = match mft.data(r, "") {
+            Some(Ok(item)) => item,
+            Some(Err(e)) => return Err(Error::recorded(code::NTFS_MFT_STREAM, format!("$DATA: {e}"))),
+            None => return Err(Error::recorded(code::NTFS_MFT_STREAM, "no $DATA on record 0")),
+        };
+        let attr = item.to_attribute().map_err(|e| Error::recorded(code::NTFS_MFT_STREAM, e.to_string()))?;
+        let total = attr.value_length();
+        let value = attr.value(r).map_err(|e| Error::recorded(code::NTFS_MFT_STREAM, e.to_string()))?;
+        let attached = value.attach(r);
+        let scan = mft::scan(attached, self.ntfs.file_record_size() as usize, total, progress);
+        let recoverable = scan.deleted.iter().filter(|d| d.recoverable(true)).count();
+        diag::info(code::NTFS_DELETED_LISTED, format!("{} deleted entries, {recoverable} recoverable, {} records scanned", scan.deleted.len(), scan.records));
+        let list = Arc::new(scan.deleted);
+        if let Ok(mut g) = self.deleted.lock() {
+            *g = Some(list.clone());
+        }
+        Ok(list)
+    }
+
+    /// The entry of a deleted record.
+    fn deleted_entry(&self, d: &Deleted) -> Entry {
+        let kind = if d.record.is_dir { EntryKind::Dir } else { EntryKind::File };
+        let mut e = Entry::new(&deleted_path(&d.record.number.to_string(), &d.path), kind);
+        e.id = d.record.number;
+        e.size = if d.record.is_dir { 0 } else { d.size() };
+        e.times = d.times();
+        e.deleted = true;
+        e.recoverable = d.recoverable(true);
+        for s in &d.record.data {
+            if !s.name.is_empty() && !e.streams.iter().any(|x| x.name == s.name) {
+                e.streams.push(Stream { name: s.name.clone(), size: s.size });
+            }
+        }
+        e.streams.sort_by(|a, b| a.name.cmp(&b.name));
+        e
+    }
+
+    /// Finds a deleted record by the id in a `$DELETED` path.
+    fn find_deleted<'a>(&self, list: &'a [Deleted], id: &str, path: &str) -> Result<&'a Deleted> {
+        let n: u64 = id.parse().map_err(|_| Error::new(code::NTFS_DELETED_RECORD, path.to_string()))?;
+        list.binary_search_by_key(&n, |d| d.record.number).map(|i| &list[i]).map_err(|_| Error::new(fscode::FS_DELETED_NOT_FOUND, path.to_string()))
+    }
+
+    /// The `$DELETED` folder itself.
+    fn deleted_root_entry(&self) -> Entry {
+        let mut e = Entry::new(&format!("/{DELETED_DIR}"), EntryKind::Dir);
+        e.deleted = true;
+        e
     }
 
     /// Volume serial number.
@@ -227,9 +300,25 @@ impl FileSystem for NtfsFs {
         Some(self.size)
     }
 
+    fn supports_deleted(&self) -> bool {
+        true
+    }
+
+    fn deleted(&self, progress: Option<Progress<'_>>) -> Result<Vec<Entry>> {
+        self.deleted_entries(progress)
+    }
+
     fn metadata(&self, path: &str) -> Result<Entry> {
+        if is_deleted_root(path) {
+            return Ok(self.deleted_root_entry());
+        }
         let mut guard = self.lock()?;
         let r: &mut SharedReader = &mut guard;
+        if let Some((id, _)) = parse_deleted(path) {
+            let list = self.deleted_list(r, None)?;
+            let d = self.find_deleted(&list, &id, path)?;
+            return Ok(self.deleted_entry(d));
+        }
         let file = self.navigate(r, path)?;
         Ok(self.entry_of(r, &file, &normalize(path)))
     }
@@ -237,6 +326,20 @@ impl FileSystem for NtfsFs {
     fn read_dir(&self, path: &str) -> Result<Vec<Entry>> {
         let mut guard = self.lock()?;
         let r: &mut SharedReader = &mut guard;
+        if is_deleted_root(path) {
+            let list = self.deleted_list(r, None)?;
+            return Ok(list.iter().map(|d| self.deleted_entry(d)).collect());
+        }
+        if let Some((id, _)) = parse_deleted(path) {
+            let list = self.deleted_list(r, None)?;
+            let d = self.find_deleted(&list, &id, path)?;
+            if !d.record.is_dir {
+                return Err(Error::new(fscode::FS_NOT_A_DIR, path.to_string()));
+            }
+            // The children of a deleted directory are deleted entries of their own.
+            let prefix = format!("{}/", d.path.trim_end_matches('/'));
+            return Ok(list.iter().filter(|c| c.path.starts_with(&prefix) && !c.path[prefix.len()..].contains('/')).map(|c| self.deleted_entry(c)).collect());
+        }
         let dir = self.navigate(r, path)?;
         if !dir.is_directory() {
             return Err(Error::new(fscode::FS_NOT_A_DIR, path.to_string()));
@@ -285,6 +388,36 @@ impl FileSystem for NtfsFs {
     fn copy_to(&self, path: &str, stream: Option<&str>, sink: Sink<'_>, progress: Option<Progress<'_>>) -> Result<u64> {
         let mut guard = self.lock()?;
         let r: &mut SharedReader = &mut guard;
+        if let Some((id, _)) = parse_deleted(path) {
+            let list = self.deleted_list(r, None)?;
+            let d = self.find_deleted(&list, &id, path)?;
+            if d.record.is_dir {
+                return Err(Error::new(fscode::FS_NOT_A_FILE, path.to_string()));
+            }
+            let stream_name = stream.unwrap_or("");
+            let data = match d.record.data.iter().find(|x| x.name.eq_ignore_ascii_case(stream_name)) {
+                Some(x) => x,
+                None if stream_name.is_empty() => return Err(Error::new(fscode::FS_DELETED_UNRECOVERABLE, format!("{path}: no $DATA left in the record"))),
+                None => return Err(Error::new(fscode::FS_STREAM_NOT_FOUND, format!("{path}:{stream_name}"))),
+            };
+            if d.record.has_attribute_list || !data.is_plain() || (data.resident.is_none() && data.runs.is_empty() && data.size > 0) {
+                return Err(Error::new(fscode::FS_DELETED_UNRECOVERABLE, path.to_string()));
+            }
+            let cs = self.ntfs.cluster_size() as u64;
+            let volume = r.clone();
+            let mut read_clusters = |lcn: u64, count: u64| -> std::io::Result<Vec<u8>> {
+                let mut buf = vec![0u8; (count * cs) as usize];
+                volume.read_at(lcn * cs, &mut buf)?;
+                Ok(buf)
+            };
+            return match mft::stream_data(data, cs, &mut read_clusters, sink, progress) {
+                Ok(n) => Ok(n),
+                Err(e) => {
+                    diag::warn(code::NTFS_DELETED_READ, format!("{path}: {e}"));
+                    Err(Error::new(fscode::FS_READ, format!("{path}: {e}")))
+                }
+            };
+        }
         let file = self.navigate(r, path)?;
         if file.is_directory() {
             return Err(Error::new(fscode::FS_NOT_A_FILE, path.to_string()));
@@ -337,6 +470,23 @@ impl FileSystem for NtfsFs {
             }
         }
         Ok(done)
+    }
+}
+
+impl NtfsFs {
+    /// The deleted entries, scanning the `$MFT` the first time.
+    pub fn deleted_entries(&self, progress: Option<Progress<'_>>) -> Result<Vec<Entry>> {
+        let mut guard = self.lock()?;
+        let r: &mut SharedReader = &mut guard;
+        let list = self.deleted_list(r, progress)?;
+        Ok(list.iter().map(|d| self.deleted_entry(d)).collect())
+    }
+
+    /// The raw deleted records, for tools that want the runs and names themselves.
+    pub fn deleted_records(&self, progress: Option<Progress<'_>>) -> Result<Arc<Vec<Deleted>>> {
+        let mut guard = self.lock()?;
+        let r: &mut SharedReader = &mut guard;
+        self.deleted_list(r, progress)
     }
 }
 

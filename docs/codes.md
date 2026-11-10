@@ -110,6 +110,23 @@ Every code evidencefs can record, with what it means and what to do about it. Th
 | `EF409_NTFS_OPENED` | an NTFS volume was opened: label, serial number, cluster size and size |
 | `EF410_NTFS_NAME_LOSSY` | a file name has unpaired UTF-16 surrogates; it is shown with replacement characters |
 | `EF411_NTFS_DATA_RUN` | reading a file's data failed part-way (a bad data run or a read past the volume); the bytes read so far are kept |
+| `EF412_NTFS_MFT_STREAM` | the $MFT's own data stream (record 0) could not be opened; deleted files cannot be listed on this volume |
+| `EF413_NTFS_DELETED_LISTED` | the deleted entries of the volume were listed from the $MFT: how many, how many with content still readable |
+| `EF414_NTFS_DELETED_READ` | reading a deleted file's clusters failed; the run points outside the volume or the image is truncated there, the bytes read so far are kept |
+| `EF415_NTFS_DELETED_RECORD` | the $DELETED id is not a record number; use the number shown in the listing (`/$DELETED/1234/...`) |
+| `EF430_MFT_RECORD_SIZE` | the $MFT record size is not 1024 or 4096 bytes; the volume's boot sector is unusual or the file given is not an $MFT, nothing was parsed |
+| `EF431_MFT_BAD_FIXUP` | a FILE record's update sequence does not match its sectors; the record is torn (half-written) and was skipped |
+| `EF432_MFT_BAD_HEADER` | a record has no FILE signature or an impossible header; it is unused space or damage and was skipped |
+| `EF433_MFT_ATTRIBUTE_TRUNCATED` | an attribute runs past the end of its record; the attributes before it were kept |
+| `EF434_MFT_NAME_TOO_LONG` | a $FILE_NAME attribute claims more than 255 characters; the name was ignored |
+| `EF435_MFT_RUNLIST_BAD` | a data run list is malformed (a run points before cluster 0 or past the end); the runs decoded so far were kept and the file is marked not recoverable |
+| `EF436_MFT_ATTRIBUTE_LIST` | a deleted record has an $ATTRIBUTE_LIST: its attributes live in other records this reader does not chase, so its content may be incomplete and is marked not recoverable |
+| `EF437_MFT_SCANNED` | the $MFT was scanned: records, in use, deleted with a name, bytes |
+| `EF438_MFT_PARENT_REUSED` | the parent directory of a deleted file has been reused since (its sequence number moved on); the path is rebuilt under $OrphanFiles |
+| `EF439_MFT_READ` | reading the $MFT stream failed part-way; the records read so far were kept |
+| `EF440_MFT_COMPRESSED` | a deleted file's data is compressed, encrypted or sparse in a way this reader does not decode; its metadata is listed, its content is not recoverable |
+| `EF441_MFT_EXTENSION_RECORD` | a record is an extension of another (its base reference is set); it carries no name of its own and was folded into the count |
+| `EF442_MFT_TOO_MANY` | more deleted records than the limit were found; the list was cut |
 | `EF450_EXT_OPEN` | the volume's superblock or group descriptors could not be parsed as ext2/3/4; the offset is wrong, the superblock is damaged (ext keeps backups at block group 1, 3, 5...), or the feature set is one the driver refuses |
 | `EF451_EXT_READ_DIR` | a directory could not be listed; its blocks are damaged or the image is truncated there |
 | `EF452_EXT_METADATA` | an inode could not be read; the inode table is damaged there, the entry is listed without times |
@@ -118,6 +135,18 @@ Every code evidencefs can record, with what it means and what to do about it. Th
 | `EF455_EXT_NAME_UNDECODABLE` | a file name is not UTF-8; it is shown lossily |
 | `EF456_EXT_LINK_TARGET` | a symbolic link's target could not be read; the entry is listed as a link without a target |
 | `EF457_EXT_PATH` | a path is not valid for ext4-view (empty component, NUL byte); it was refused |
+| `EF458_EXT_RECOVER_GEOMETRY` | the superblock could not be parsed for recovery (bad magic, impossible geometry); the live tree still works, deleted files cannot be listed |
+| `EF459_EXT_JOURNAL_INODE` | the journal inode is unreadable or is not a file (an external journal, or ext2 without one); only directory slack is searched for deleted names |
+| `EF460_EXT_JOURNAL_SUPERBLOCK` | the journal file does not start with a jbd2 superblock; the journal was skipped |
+| `EF461_EXT_JOURNAL_BLOCK_SIZE` | the journal's block size differs from the file system's; the journal was skipped |
+| `EF462_EXT_JOURNAL_SCANNED` | the journal area was walked: blocks, descriptors, commits, revokes, block copies found |
+| `EF463_EXT_LIVE_TREE_TRUNCATED` | the live directory tree has more directories than the limit; names under the directories not walked cannot be matched |
+| `EF464_EXT_DELETED_FOUND` | deleted files and previous versions were found: how many of each, how many with content still readable |
+| `EF465_EXT_BLOCKS_REUSED` | a deleted file's blocks are allocated again, so its old content is gone; the entry is listed without content |
+| `EF466_EXT_RECOVER_READ` | reading a recovered file's blocks failed part-way; the bytes read so far were kept |
+| `EF467_EXT_TOO_MANY_GROUPS` | the superblock declares more block groups than the limit; the volume is refused for recovery |
+| `EF468_EXT_JOURNAL_TRUNCATED` | the journal is longer than the block limit; the part beyond was not read |
+| `EF469_EXT_RECOVER_NOT_REGULAR` | the inode of a deleted name is not a regular file in its journal copy (a directory, a device); only regular files are recovered |
 | `EF500_XFS_OPEN` | the volume's superblock could not be parsed as XFS; the offset is wrong or the superblock is damaged (XFS keeps a copy in every allocation group) |
 | `EF501_XFS_LOOKUP` | a path could not be resolved; a directory block on the way is damaged |
 | `EF502_XFS_INODE` | an inode could not be read; the inode chunk is damaged or fails its CRC, the entry is listed without times |
@@ -147,6 +176,10 @@ Every code evidencefs can record, with what it means and what to do about it. Th
 | `EF612_FS_OPENED` | a file system was opened; its kind, label and size |
 | `EF613_FS_PATH_ESCAPES` | a path tries to climb above the root with '..'; it was refused |
 | `EF614_WALK_STOPPED` | the caller stopped the walk before the end |
+| `EF615_FS_DELETED_UNSUPPORTED` | this file system keeps no trace of deleted files that the reader can list (folders, zips, XFS); NTFS and ext volumes do, open the image instead of a copied tree |
+| `EF616_FS_DELETED_NOT_FOUND` | no deleted entry has that record or inode number under $DELETED; list $DELETED to see the ones there are |
+| `EF617_FS_DELETED_UNRECOVERABLE` | the deleted entry's metadata is listed but its content cannot be read back: a directory, clusters reused or unknown, compressed data, or a bare $MFT without the volume |
+| `EF618_FS_DELETED_LISTED` | the deleted entries of a file system were listed: how many, how many recoverable |
 | `EF650_EXTRACT_DEST_CREATE` | the destination folder could not be created; check the path, permissions and free space |
 | `EF651_EXTRACT_WRITE` | writing the copy failed; the disk is full, the path is too long, or the file is locked |
 | `EF652_EXTRACT_READ` | reading the source failed part-way; the copy is incomplete and was removed |
@@ -168,3 +201,18 @@ Every code evidencefs can record, with what it means and what to do about it. Th
 | `EF707_TRIAGE_LINUX_HOSTNAME` | the host name was read from etc/hostname inside the evidence |
 | `EF750_TIME_OUT_OF_RANGE` | a timestamp is before year 1601 or after year 9999 and was clamped; the on-disk value was damaged or never set, read the raw value when it matters |
 | `EF751_TIME_UNSET` | a timestamp field is zero (never set); the column is left empty rather than shown as the epoch |
+| `EF850_CARVE_EMPTY` | the source has no bytes to scan |
+| `EF851_CARVE_NO_KINDS` | no carve kind was selected; pick at least one of hive, evtx, prefetch, lnk, sqlite, pe, pdf, zip, jpeg, png |
+| `EF852_CARVE_STARTED` | a carve scan started: source size, kinds, threads |
+| `EF853_CARVE_FOUND` | a carve scan finished: items per kind, bytes read, read errors |
+| `EF854_CARVE_CANCELLED` | the carve scan was cancelled by the caller; the items found so far are kept |
+| `EF855_CARVE_READ_ERROR` | a block of the source could not be read during the scan; the window was skipped and the scan went on |
+| `EF856_CARVE_LIMIT` | the scan found more items than the limit and stopped listing new ones |
+| `EF857_CARVE_OVERSIZE` | a structure declares a size above the per-item limit; it was cut to the limit and marked incomplete |
+| `EF858_CARVE_HIVE_TRUNCATED` | a carved hive's bins end before its declared size (overwritten or fragmented); the verified prefix is what reads back |
+| `EF859_CARVE_EVTX_RUN` | a run of consecutive event log chunks was carved as one .evtx with a rebuilt file header |
+| `EF860_CARVE_INVALID_ID` | a $CARVED id is not <kind>_<offset in hex>; use the id shown in the listing |
+| `EF861_CARVE_NOT_FOUND` | no carved item has that id in this scan's results; run the scan again with the kind included |
+| `EF862_CARVE_UNSUPPORTED_SOURCE` | carving needs an image, a volume or a single file; a folder or an archive has no unallocated space to scan |
+| `EF863_CARVE_KIND_UNKNOWN` | a carve kind name was not recognised; the known kinds are hive, evtx, prefetch, lnk, sqlite, pe, pdf, zip, jpeg, png |
+| `EF864_CARVE_READ` | reading a carved item back failed part-way; the bytes read so far are kept |
