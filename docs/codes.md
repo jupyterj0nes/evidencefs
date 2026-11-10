@@ -211,7 +211,7 @@ Every code evidencefs can record, with what it means and what to do about it. Th
 | `EF857_CARVE_OVERSIZE` | a structure declares a size above the per-item limit; it was cut to the limit and marked incomplete |
 | `EF858_CARVE_HIVE_TRUNCATED` | a carved hive's bins end before its declared size (overwritten or fragmented); the verified prefix is what reads back |
 | `EF859_CARVE_EVTX_RUN` | a run of consecutive event log chunks was carved as one .evtx with a rebuilt file header |
-| `EF860_CARVE_INVALID_ID` | a $CARVED id is not <kind>_<offset in hex>; use the id shown in the listing |
+| `EF860_CARVE_INVALID_ID` | a carved item id is not of the form kind_offset (the kind name, an underscore, the offset in hex: hive_599000); use the id shown in the listing |
 | `EF861_CARVE_NOT_FOUND` | no carved item has that id in this scan's results; run the scan again with the kind included |
 | `EF862_CARVE_UNSUPPORTED_SOURCE` | carving needs an image, a volume or a single file; a folder or an archive has no unallocated space to scan |
 | `EF863_CARVE_KIND_UNKNOWN` | a carve kind name was not recognised; the known kinds are hive, evtx, prefetch, lnk, sqlite, pe, pdf, zip, jpeg, png |

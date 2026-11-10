@@ -33,7 +33,7 @@ pub mod code {
         CARVE_OVERSIZE = 857, "a structure declares a size above the per-item limit; it was cut to the limit and marked incomplete";
         CARVE_HIVE_TRUNCATED = 858, "a carved hive's bins end before its declared size (overwritten or fragmented); the verified prefix is what reads back";
         CARVE_EVTX_RUN = 859, "a run of consecutive event log chunks was carved as one .evtx with a rebuilt file header";
-        CARVE_INVALID_ID = 860, "a $CARVED id is not <kind>_<offset in hex>; use the id shown in the listing";
+        CARVE_INVALID_ID = 860, "a carved item id is not of the form kind_offset (the kind name, an underscore, the offset in hex: hive_599000); use the id shown in the listing";
         CARVE_NOT_FOUND = 861, "no carved item has that id in this scan's results; run the scan again with the kind included";
         CARVE_UNSUPPORTED_SOURCE = 862, "carving needs an image, a volume or a single file; a folder or an archive has no unallocated space to scan";
         CARVE_KIND_UNKNOWN = 863, "a carve kind name was not recognised; the known kinds are hive, evtx, prefetch, lnk, sqlite, pe, pdf, zip, jpeg, png";
