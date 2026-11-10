@@ -7,6 +7,7 @@ pub mod extjournal;
 pub mod folder;
 pub mod mft;
 pub mod ntfs;
+pub mod tarfs;
 pub mod xfs;
 pub mod zipfs;
 
@@ -48,6 +49,8 @@ pub enum FsKind {
     Xfs,
     Folder,
     Zip,
+    /// A tar read in place (a compressed one through its single decompressed copy).
+    Tar,
 }
 
 impl FsKind {
@@ -59,12 +62,13 @@ impl FsKind {
             FsKind::Xfs => "XFS",
             FsKind::Folder => "folder",
             FsKind::Zip => "zip",
+            FsKind::Tar => "tar",
         }
     }
 
     /// Does name lookup ignore case?
     pub fn case_insensitive(&self) -> bool {
-        matches!(self, FsKind::Ntfs | FsKind::Zip | FsKind::Folder)
+        matches!(self, FsKind::Ntfs | FsKind::Zip | FsKind::Folder | FsKind::Tar)
     }
 }
 

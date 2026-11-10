@@ -352,3 +352,86 @@ fn memory_dump_carves_hives_and_event_chunks() {
     let (again, _) = ev.carve(&opts, None, None).unwrap();
     assert_eq!(again, items);
 }
+
+/// Every file under `dir`, recursively (relative paths).
+fn files_under(dir: &Path) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        if let Ok(rd) = std::fs::read_dir(&d) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else {
+                    out.push(p.strip_prefix(dir).unwrap_or(&p).display().to_string());
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// A compressed tar is decompressed into ONE file and read in place: no member is ever
+/// written to disk on its own, so an antivirus never sees the evidence's files.
+fn compressed_tar_leaves_one_file(rel: &str, expect_hostname: Option<&str>) {
+    quiet();
+    let Some(p) = lab(rel) else { return };
+    let tag: String = rel.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+    let temp_base = std::env::temp_dir().join(format!("evidencefs-lab-onefile-{}-{tag}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&temp_base);
+    std::fs::create_dir_all(&temp_base).unwrap();
+    let started = std::time::Instant::now();
+    let ev = Evidence::open(&p, &OpenOptions { temp_dir: Some(temp_base.clone()), ..Default::default() }).expect("opens");
+    let opened = started.elapsed();
+    assert_eq!(ev.mounts[0].label, "tar");
+    assert_eq!(ev.mounts[0].fs.kind(), FsKind::Tar);
+    let files = files_under(&temp_base);
+    assert_eq!(files.len(), 1, "only the decompressed tar: {files:?}");
+    assert!(files[0].ends_with("tar.tar"), "{files:?}");
+    let temp_bytes: u64 = std::fs::metadata(temp_base.join(&files[0])).map(|m| m.len()).unwrap_or(0);
+    // Walk and read every file: still nothing else lands in the temp folder.
+    let mut read = 0u64;
+    let stats = ev.walk_all(&WalkOptions::default(), &mut |mi, e| {
+        if e.is_file() {
+            let mut sink = std::io::sink();
+            read += ev.mounts[mi].fs.copy_to(&e.path, None, &mut sink, None).unwrap_or(0);
+        }
+        WalkStep::Continue
+    });
+    assert!(stats.files > 0);
+    assert_eq!(files_under(&temp_base).len(), 1, "reading members writes nothing");
+    if let Some(h) = expect_hostname {
+        assert_eq!(ev.hostname().as_deref().map(|s| s.split('.').next().unwrap_or(s).to_ascii_lowercase()), Some(h.to_string()));
+    }
+    // Two walks give the same entries (no time comes from the host).
+    let snap = |ev: &Evidence| {
+        let mut v = Vec::new();
+        ev.walk_all(&WalkOptions::default(), &mut |_, e| {
+            v.push(format!("{} {} {:?} {:?}", e.path, e.size, e.kind, e.times));
+            WalkStep::Continue
+        });
+        v
+    };
+    assert_eq!(snap(&ev), snap(&ev));
+    eprintln!("{rel}: opened in {opened:?}, {} files, {} dirs, {read} bytes read, temp {temp_bytes} bytes in one file", stats.files, stats.dirs);
+    drop(ev);
+    assert!(files_under(&temp_base).is_empty(), "temp removed on drop");
+    let _ = std::fs::remove_dir_all(&temp_base);
+}
+
+#[test]
+fn lnx01_tgz_is_read_through_one_decompressed_file() {
+    compressed_tar_leaves_one_file(r"mixed-intake\lnx01.tgz", Some("leo-lnx01"));
+}
+
+#[test]
+fn uac_tarball_is_read_through_one_decompressed_file() {
+    compressed_tar_leaves_one_file(r"mixed-intake\uac-leo-lnx01-linux-20261028203103.tar.gz", None);
+}
+
+#[test]
+fn rangeforge_linux_triage_is_read_through_one_decompressed_file() {
+    compressed_tar_leaves_one_file(r"rangeforge-20261110\LEO-LNX01-triage.tgz", None);
+}

@@ -326,11 +326,15 @@ impl Evidence {
                 let fs = fs::zipfs::ZipFs::open(&path)?;
                 self.add_mount("zip", Box::new(fs), MountSource::Archive { path, kind });
             }
-            ArchiveKind::Tar | ArchiveKind::TarGz => {
+            ArchiveKind::Tar => {
+                // Read in place: nothing is written.
+                let fs = fs::tarfs::TarFs::open(&path)?;
+                self.add_mount("tar", Box::new(fs), MountSource::Archive { path, kind });
+            }
+            ArchiveKind::TarGz | ArchiveKind::TarBz2 | ArchiveKind::TarXz => {
+                // Decompressed once into one file, then read in place: no member on disk.
                 let temp = self.temp(opts)?;
-                let dest = temp.join("tar");
-                archive::unpack_tar(&path, &dest, None)?;
-                let fs = fs::folder::FolderFs::open(&dest)?;
+                let fs = fs::tarfs::TarFs::open_compressed(&path, kind, &temp.join("tar.tar"))?;
                 self.add_mount("tar", Box::new(fs), MountSource::Archive { path, kind });
             }
             other => return Err(Error::recorded(archive::code::ARCHIVE_UNSUPPORTED, format!("{}: {}", path.display(), other.label()))),
@@ -389,9 +393,13 @@ impl Evidence {
                 let label = format!("{parent_label}{}", e.path);
                 let mounted: Result<Box<dyn FileSystem>> = match kind {
                     ArchiveKind::Zip => fs::zipfs::ZipFs::open(&copied).map(|f| Box::new(f) as Box<dyn FileSystem>),
+                    ArchiveKind::Tar => fs::tarfs::TarFs::open(&copied).map(|f| Box::new(f) as Box<dyn FileSystem>),
                     _ => {
-                        let dest = copied.with_extension("unpacked");
-                        archive::unpack_tar(&copied, &dest, None).and_then(|_| fs::folder::FolderFs::open(&dest).map(|f| Box::new(f) as Box<dyn FileSystem>))
+                        // One decompressed .tar beside the copy; the compressed copy goes.
+                        let dest = copied.with_extension("decompressed.tar");
+                        let opened = fs::tarfs::TarFs::open_compressed(&copied, kind, &dest).map(|f| Box::new(f) as Box<dyn FileSystem>);
+                        let _ = std::fs::remove_file(&copied);
+                        opened
                     }
                 };
                 match mounted {

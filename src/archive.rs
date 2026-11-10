@@ -1,6 +1,9 @@
-//! Archives as evidence: a zip is read in place ([`crate::fs::zipfs::ZipFs`]); a tar,
-//! `.tar.gz` or `.tgz` is unpacked once into a temporary folder that lives as long as the
-//! evidence does. 7z and RAR are recognised and refused with a code.
+//! Archives as evidence: a zip is read in place ([`crate::fs::zipfs::ZipFs`]), a tar is
+//! read in place ([`crate::fs::tarfs::TarFs`]), and a `.tar.gz`/`.tgz`, `.tar.bz2` or
+//! `.tar.xz` is decompressed once into a single temporary `.tar` that is then read in
+//! place: no member is ever written to disk on its own. 7z and RAR are recognised and
+//! refused with a code. [`unpack_tar`] stays for callers that want a tar unpacked into a
+//! folder on purpose; the evidence reader no longer uses it.
 
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -11,20 +14,34 @@ use crate::error::{Error, Result};
 
 pub mod code {
     crate::codes! {
-        ARCHIVE_UNSUPPORTED = 200, "the archive format (7z, RAR, xz, bz2) is not read by this crate; unpack it with 7-Zip or bsdtar and give the folder";
+        ARCHIVE_UNSUPPORTED = 200, "the archive format (7z, RAR) is not read by this crate; unpack it with 7-Zip or bsdtar and give the folder";
         ARCHIVE_OPEN = 201, "the archive could not be opened; the file is truncated, not an archive, or locked";
-        ARCHIVE_ENTRY_UNSAFE = 202, "a member path climbs out of the destination ('..', absolute, drive letter) or is a device link; it was skipped";
+        ARCHIVE_ENTRY_UNSAFE = 202, "a member path climbs out of the archive ('..', absolute, drive letter); it is listed under a sanitised name (`..` as `__`, the root dropped) so it stays visible, and never written outside";
         ARCHIVE_ENTRY_ERROR = 203, "a member could not be unpacked; the archive is damaged there, the rest went on";
         ARCHIVE_UNPACKED = 204, "an archive was unpacked into a temporary folder: members, bytes, destination";
         ARCHIVE_NESTED = 205, "an archive inside the evidence was found and opened as a nested mount";
         ARCHIVE_NESTED_LIMIT = 206, "an archive is nested deeper than the limit; it was listed as a file, not opened";
         ARCHIVE_TEMP_DIR = 207, "the temporary folder for unpacking could not be created; check the temp location and free space";
-        ARCHIVE_GZIP = 208, "the gzip stream is damaged or truncated; the members unpacked before the damage are kept";
+        ARCHIVE_GZIP = 208, "the gzip, bzip2 or xz stream is damaged or truncated; the members decompressed before the damage are kept";
         ARCHIVE_EMPTY = 209, "the archive has no members";
         ARCHIVE_BY_SIGNATURE = 210, "the extension did not say what the archive is, the first bytes did";
         ARCHIVE_TEMP_CLEANUP = 211, "the temporary folder could not be removed when the evidence was closed; remove it by hand";
         ARCHIVE_TAR_SPARSE = 212, "a tar member is sparse or of a type (device, fifo) that is not unpacked; it was skipped";
         ARCHIVE_SYMLINK_SKIPPED = 213, "a tar member is a symbolic or hard link; links are not recreated, the member was skipped and noted";
+        TAR_INDEXED = 214, "a tar was indexed and is read in place: files, directories, links, other members, bytes, and which file is read (the evidence, or its single decompressed copy)";
+        TAR_DECOMPRESSED = 215, "a compressed tar (gzip, bzip2, xz) was decompressed once, streaming, into a single temporary .tar that is read in place; no member is written to disk on its own";
+        TAR_HEADER_CORRUPT = 216, "a tar header is damaged (bad checksum, impossible field, unexpected end); indexing stopped there, the members before it are read";
+        TAR_MEMBER_TRUNCATED = 217, "a tar member's data runs past the end of the archive (an interrupted copy or download); it is listed with the bytes that are there";
+        TAR_DUPLICATE_MEMBER = 218, "the same path is in the tar twice (appended updates); the later copy is read, as tar itself would extract it";
+        TAR_HARDLINK = 219, "a tar hard link reads as the member it links to (same content, its own name and times)";
+        TAR_HARDLINK_DANGLING = 220, "a tar hard link names a member that is not in the archive; it is listed without content";
+        TAR_SPARSE_MEMBER = 221, "a GNU sparse member is read by replaying the archive up to it, so its holes come back as zeros; slower than other members";
+        TAR_SPARSE_PAX = 222, "a PAX-format sparse member is read as stored (data chunks back to back, holes not expanded); its content is not the original file's layout";
+        TAR_SPECIAL_MEMBER = 223, "a tar member is a device, fifo or socket; it is listed without content";
+        TAR_PAX_INVALID = 224, "a PAX extended header record is not valid UTF-8 key=value; it was ignored, the member is read with its plain header";
+        TAR_EXTRA_TIMES = 225, "a tar member carries access or change times (PAX atime/ctime, GNU incremental fields); they are reported with the modification time";
+        TAR_READ = 226, "reading a member out of the tar failed (the archive changed, was truncated, or the disk returned an error); the bytes read so far were written";
+        TAR_TEMP_WRITE = 227, "the single temporary .tar for a compressed archive could not be written (disk full, folder not writable); choose another temporary folder with free space";
     }
 }
 
@@ -34,9 +51,7 @@ pub enum ArchiveKind {
     Zip,
     Tar,
     TarGz,
-    /// Recognised, not read.
     TarBz2,
-    /// Recognised, not read.
     TarXz,
     /// Recognised, not read.
     SevenZip,
@@ -60,7 +75,7 @@ impl ArchiveKind {
 
     /// Can this crate read it?
     pub fn is_supported(&self) -> bool {
-        matches!(self, ArchiveKind::Zip | ArchiveKind::Tar | ArchiveKind::TarGz)
+        matches!(self, ArchiveKind::Zip | ArchiveKind::Tar | ArchiveKind::TarGz | ArchiveKind::TarBz2 | ArchiveKind::TarXz)
     }
 }
 

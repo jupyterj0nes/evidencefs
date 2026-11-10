@@ -54,20 +54,34 @@ Every code evidencefs can record, with what it means and what to do about it. Th
 | `EF162_VMDK_GRAIN_READ` | a grain could not be read or decompressed; that grain reads as zeros, the extent is damaged there |
 | `EF163_VMDK_HAS_PARENT` | the VMDK is a snapshot delta (parentFileNameHint / parentCID set); give the base disk or merge the snapshot chain first (vmware-vdiskmanager -r, qemu-img convert) |
 | `EF164_VMDK_RAW_FALLBACK` | the file has neither a sparse header nor a descriptor; it was read as a flat extent of its own size |
-| `EF200_ARCHIVE_UNSUPPORTED` | the archive format (7z, RAR, xz, bz2) is not read by this crate; unpack it with 7-Zip or bsdtar and give the folder |
+| `EF200_ARCHIVE_UNSUPPORTED` | the archive format (7z, RAR) is not read by this crate; unpack it with 7-Zip or bsdtar and give the folder |
 | `EF201_ARCHIVE_OPEN` | the archive could not be opened; the file is truncated, not an archive, or locked |
-| `EF202_ARCHIVE_ENTRY_UNSAFE` | a member path climbs out of the destination ('..', absolute, drive letter) or is a device link; it was skipped |
+| `EF202_ARCHIVE_ENTRY_UNSAFE` | a member path climbs out of the archive ('..', absolute, drive letter); it is listed under a sanitised name (`..` as `__`, the root dropped) so it stays visible, and never written outside |
 | `EF203_ARCHIVE_ENTRY_ERROR` | a member could not be unpacked; the archive is damaged there, the rest went on |
 | `EF204_ARCHIVE_UNPACKED` | an archive was unpacked into a temporary folder: members, bytes, destination |
 | `EF205_ARCHIVE_NESTED` | an archive inside the evidence was found and opened as a nested mount |
 | `EF206_ARCHIVE_NESTED_LIMIT` | an archive is nested deeper than the limit; it was listed as a file, not opened |
 | `EF207_ARCHIVE_TEMP_DIR` | the temporary folder for unpacking could not be created; check the temp location and free space |
-| `EF208_ARCHIVE_GZIP` | the gzip stream is damaged or truncated; the members unpacked before the damage are kept |
+| `EF208_ARCHIVE_GZIP` | the gzip, bzip2 or xz stream is damaged or truncated; the members decompressed before the damage are kept |
 | `EF209_ARCHIVE_EMPTY` | the archive has no members |
 | `EF210_ARCHIVE_BY_SIGNATURE` | the extension did not say what the archive is, the first bytes did |
 | `EF211_ARCHIVE_TEMP_CLEANUP` | the temporary folder could not be removed when the evidence was closed; remove it by hand |
 | `EF212_ARCHIVE_TAR_SPARSE` | a tar member is sparse or of a type (device, fifo) that is not unpacked; it was skipped |
 | `EF213_ARCHIVE_SYMLINK_SKIPPED` | a tar member is a symbolic or hard link; links are not recreated, the member was skipped and noted |
+| `EF214_TAR_INDEXED` | a tar was indexed and is read in place: files, directories, links, other members, bytes, and which file is read (the evidence, or its single decompressed copy) |
+| `EF215_TAR_DECOMPRESSED` | a compressed tar (gzip, bzip2, xz) was decompressed once, streaming, into a single temporary .tar that is read in place; no member is written to disk on its own |
+| `EF216_TAR_HEADER_CORRUPT` | a tar header is damaged (bad checksum, impossible field, unexpected end); indexing stopped there, the members before it are read |
+| `EF217_TAR_MEMBER_TRUNCATED` | a tar member's data runs past the end of the archive (an interrupted copy or download); it is listed with the bytes that are there |
+| `EF218_TAR_DUPLICATE_MEMBER` | the same path is in the tar twice (appended updates); the later copy is read, as tar itself would extract it |
+| `EF219_TAR_HARDLINK` | a tar hard link reads as the member it links to (same content, its own name and times) |
+| `EF220_TAR_HARDLINK_DANGLING` | a tar hard link names a member that is not in the archive; it is listed without content |
+| `EF221_TAR_SPARSE_MEMBER` | a GNU sparse member is read by replaying the archive up to it, so its holes come back as zeros; slower than other members |
+| `EF222_TAR_SPARSE_PAX` | a PAX-format sparse member is read as stored (data chunks back to back, holes not expanded); its content is not the original file's layout |
+| `EF223_TAR_SPECIAL_MEMBER` | a tar member is a device, fifo or socket; it is listed without content |
+| `EF224_TAR_PAX_INVALID` | a PAX extended header record is not valid UTF-8 key=value; it was ignored, the member is read with its plain header |
+| `EF225_TAR_EXTRA_TIMES` | a tar member carries access or change times (PAX atime/ctime, GNU incremental fields); they are reported with the modification time |
+| `EF226_TAR_READ` | reading a member out of the tar failed (the archive changed, was truncated, or the disk returned an error); the bytes read so far were written |
+| `EF227_TAR_TEMP_WRITE` | the single temporary .tar for a compressed archive could not be written (disk full, folder not writable); choose another temporary folder with free space |
 | `EF250_PART_NO_TABLE` | the image has no MBR signature (55 AA) at the end of its first sector; it was read as a single volume starting at offset 0 |
 | `EF251_PART_PROTECTIVE_MBR_ONLY` | the MBR marks the disk as GPT (type EE) but no GPT header was found at LBA 1 nor at the last LBA; the partition table is gone, the volumes were searched at common offsets |
 | `EF252_PART_GPT_HEADER_BAD` | the GPT header is present but its fields are out of range (entry count, entry size, entry LBA); the entries were not read |
