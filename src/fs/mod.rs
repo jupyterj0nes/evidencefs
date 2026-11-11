@@ -2,6 +2,7 @@
 //! a zip archive. Paths are always `/`-separated with a leading `/`, whatever the source
 //! used, so a tool asks for `/Windows/System32/config/SYSTEM` the same way everywhere.
 
+pub mod exfat;
 pub mod ext;
 pub mod fat;
 pub mod extjournal;
@@ -54,6 +55,8 @@ pub enum FsKind {
     Tar,
     /// FAT12, FAT16 or FAT32 (the EFI system partition, USB sticks, SD cards).
     Fat,
+    /// exFAT (SDXC cards, USB sticks and external disks).
+    ExFat,
 }
 
 impl FsKind {
@@ -67,12 +70,13 @@ impl FsKind {
             FsKind::Zip => "zip",
             FsKind::Tar => "tar",
             FsKind::Fat => "FAT",
+            FsKind::ExFat => "exFAT",
         }
     }
 
     /// Does name lookup ignore case?
     pub fn case_insensitive(&self) -> bool {
-        matches!(self, FsKind::Ntfs | FsKind::Zip | FsKind::Folder | FsKind::Tar | FsKind::Fat)
+        matches!(self, FsKind::Ntfs | FsKind::Zip | FsKind::Folder | FsKind::Tar | FsKind::Fat | FsKind::ExFat)
     }
 }
 

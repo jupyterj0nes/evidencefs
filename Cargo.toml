@@ -26,3 +26,4 @@ lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "x
 blockcarve = "0.1.2"
 
 [dev-dependencies]
+sha2 = "0.10"

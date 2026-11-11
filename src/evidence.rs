@@ -253,6 +253,12 @@ impl Evidence {
                         diag::warn(code::EVIDENCE_VOLUME_SKIPPED, format!("{label}: {e}"));
                     }
                 },
+                VolumeKind::ExFat => match fs::exfat::ExFatFs::open(view, &label) {
+                    Ok(fs) => self.add_mount(&label, Box::new(fs), MountSource::Volume(v.clone())),
+                    Err(e) => {
+                        diag::warn(code::EVIDENCE_VOLUME_SKIPPED, format!("{label}: {e}"));
+                    }
+                },
                 VolumeKind::Lvm if opts.lvm => match volume::lvm::PhysicalVolume::open(view, &label) {
                     Ok(pv) => {
                         for lv in pv.logical_volumes() {

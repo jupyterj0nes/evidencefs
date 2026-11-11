@@ -458,3 +458,73 @@ fn rangeforge_vmdk_mounts_the_efi_system_partition() {
     assert_eq!(&head[..2], b"MZ", "a PE image");
     assert!(files.iter().any(|(p, _)| p.to_ascii_lowercase().ends_with("/bcd")), "the boot configuration store");
 }
+
+/// An exFAT card image made on LEO-LNX01 with mkfs.exfat and the exfat-fuse driver: every
+/// file of the manifest hashes the same, the fragmented one included, and the deleted
+/// secret.txt is read back.
+#[test]
+fn exfat_card_image_matches_its_manifest() {
+    use sha2::{Digest, Sha256};
+    quiet();
+    let Some(p) = lab(r"rangeforge-20261111\exfat\card.img") else { return };
+    let dir = p.parent().unwrap().to_path_buf();
+    let ev = Evidence::open(&p, &OpenOptions::default()).expect("opens");
+    eprintln!("{}", ev.describe());
+    let m = ev.mounts.iter().find(|m| m.fs.kind() == FsKind::ExFat).expect("the card is mounted as exFAT");
+    assert_eq!(m.fs.label().as_deref(), Some("LABCARD"));
+    let hex = |b: &[u8]| Sha256::digest(b).iter().map(|x| format!("{x:02x}")).collect::<String>();
+    let manifest = std::fs::read_to_string(dir.join("manifest.txt")).unwrap();
+    let mut checked = 0;
+    for line in manifest.lines() {
+        let (sha, path) = line.split_once("  ").unwrap();
+        let path = path.trim_start_matches('.');
+        if path.ends_with("secret.txt") {
+            continue;
+        }
+        let data = m.fs.read(path, None, 64 << 20).unwrap_or_else(|e| panic!("{path}: {e}"));
+        assert_eq!(hex(&data), sha, "{path}");
+        let meta = m.fs.metadata(path).unwrap();
+        assert!(meta.times.modified.is_some_and(|t| t.secs > 1_790_000_000), "{path}: a 2026 modification time");
+        checked += 1;
+    }
+    assert_eq!(checked, 5);
+    let gone = m.fs.deleted(None).unwrap();
+    eprintln!("deleted: {:?}", gone.iter().map(|g| (&g.path, g.size, g.recoverable)).collect::<Vec<_>>());
+    let secret = gone.iter().find(|g| g.path.ends_with("/Documents/secret.txt")).expect("the deleted file is listed with its folder");
+    assert!(secret.recoverable);
+    let want = std::fs::read_to_string(dir.join("secret.sha")).unwrap();
+    assert_eq!(hex(&m.fs.read(&secret.path, None, 1 << 20).unwrap()), want.trim(), "read back");
+    assert!(gone.iter().any(|g| g.path.ends_with("/a.bin")), "the file deleted to fragment frag.bin is listed too");
+}
+
+/// The same driver on an 8 MB card filled, thinned out and written again: scattered.bin
+/// cannot be contiguous, so its clusters are a FAT chain across the holes.
+#[test]
+fn exfat_fragmented_file_follows_its_fat_chain() {
+    use sha2::{Digest, Sha256};
+    quiet();
+    let Some(p) = lab(r"rangeforge-20261111\exfat\frag.img") else { return };
+    let dir = p.parent().unwrap().to_path_buf();
+    let ev = Evidence::open(&p, &OpenOptions::default()).expect("opens");
+    let m = ev.mounts.iter().find(|m| m.fs.kind() == FsKind::ExFat).expect("exFAT");
+    let raw = std::fs::read(&p).unwrap();
+    // The image itself says scattered.bin is chained, not contiguous.
+    let name: Vec<u8> = "scattered.bin".encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    let at = raw.windows(name.len()).position(|w| w == name.as_slice()).expect("the name is in a directory") - 2;
+    assert_eq!(raw[at - 32], 0xC0, "the stream extension before the name");
+    assert_eq!(raw[at - 32 + 1] & 0x02, 0, "NoFatChain is clear: the file is fragmented");
+    let hex = |b: &[u8]| Sha256::digest(b).iter().map(|x| format!("{x:02x}")).collect::<String>();
+    let manifest = std::fs::read_to_string(dir.join("frag-manifest.txt")).unwrap();
+    for line in manifest.lines() {
+        let (sha, path) = line.split_once("  ").unwrap();
+        let path = path.trim_start_matches('.');
+        assert_eq!(hex(&m.fs.read(path, None, 64 << 20).unwrap()), sha, "{path}");
+    }
+    assert_eq!(manifest.lines().count(), 11);
+    // Ten files were thinned out; scattered.bin's entry set took the first one's slot, so
+    // nine are listed as deleted, and most of their clusters went to scattered.bin.
+    let gone = m.fs.deleted(None).unwrap();
+    assert_eq!(gone.len(), 9, "{gone:?}");
+    assert!(!gone.iter().any(|g| g.path.ends_with("/fill01.bin")), "its slot holds scattered.bin now");
+    assert!(gone.iter().filter(|g| !g.recoverable).count() >= 8, "most were overwritten by the scattered file");
+}

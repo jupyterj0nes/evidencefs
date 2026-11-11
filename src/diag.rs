@@ -23,6 +23,7 @@
 //! | 650-699 | extraction |
 //! | 700-749 | triage packages |
 //! | 750-799 | timestamps and decoding |
+//! | 800-849 | FAT12/16/32 (800-819) and exFAT (820-849) |
 //! | 850-899 | carving: signatures found in unallocated space, memory dumps, any bytes |
 //!
 //! The sink is per thread: a worker records into its own while it reads a piece of
@@ -207,6 +208,8 @@ pub fn catalog() -> Vec<Code> {
     all.extend_from_slice(crate::fs::extjournal::code::CODES);
     all.extend_from_slice(crate::carve::code::CODES);
     all.extend_from_slice(crate::fs::xfs::code::CODES);
+    all.extend_from_slice(crate::fs::fat::code::CODES);
+    all.extend_from_slice(crate::fs::exfat::code::CODES);
     all.extend_from_slice(crate::fs::folder::code::CODES);
     all.extend_from_slice(crate::fs::code::CODES);
     all.extend_from_slice(crate::extract::code::CODES);

@@ -94,7 +94,7 @@ Every code evidencefs can record, with what it means and what to do about it. Th
 | `EF259_PART_FALLBACK_OFFSET` | no partition table gave a readable volume; a file system signature was found at a common offset (0, 63 sectors, 1 MB, 2048 sectors) and that volume was added |
 | `EF260_PART_BITLOCKER` | the volume is BitLocker-encrypted (-FVE-FS- signature); it cannot be read without the recovery key, decrypt it first (dislocker, manage-bde) and give the decrypted image |
 | `EF261_PART_LUKS` | the volume is LUKS-encrypted; it cannot be read without the passphrase, open it with cryptsetup and image the mapped device |
-| `EF262_PART_FS_UNSUPPORTED` | the volume holds a file system this crate does not read yet (btrfs, F2FS, APFS, HFS+, exFAT, ReFS, swap); it is listed but not walked |
+| `EF262_PART_FS_UNSUPPORTED` | the volume holds a file system this crate does not read yet (btrfs, F2FS, APFS, HFS+, ReFS, swap); it is listed but not walked |
 | `EF263_PART_FS_UNKNOWN` | the volume holds no file system signature this crate knows; it is listed as unknown and not walked, it may be empty, encrypted with another product, or a raw data partition |
 | `EF264_PART_NONE_READABLE` | no volume of the image can be read (no NTFS, ext, XFS or LVM); the image holds only unsupported, encrypted or empty volumes |
 | `EF265_PART_LISTED` | the partitions of the image, with their kinds, as the table and the signatures gave them |
@@ -215,6 +215,30 @@ Every code evidencefs can record, with what it means and what to do about it. Th
 | `EF707_TRIAGE_LINUX_HOSTNAME` | the host name was read from etc/hostname inside the evidence |
 | `EF750_TIME_OUT_OF_RANGE` | a timestamp is before year 1601 or after year 9999 and was clamped; the on-disk value was damaged or never set, read the raw value when it matters |
 | `EF751_TIME_UNSET` | a timestamp field is zero (never set); the column is left empty rather than shown as the epoch |
+| `EF800_FAT_OPEN` | the volume's boot sector could not be parsed as FAT: bytes per sector, sectors per cluster, the FAT count or size, or the cluster count is impossible; the partition offset is wrong or the boot sector is damaged (FAT32 keeps a backup at sector 6) |
+| `EF801_FAT_OPENED` | a FAT volume was opened: FAT12, FAT16 or FAT32, cluster size, clusters, size and label |
+| `EF802_FAT_TABLE_TOO_BIG` | the file allocation table is larger than 256 MB (a FAT32 volume of several TB): it is not loaded and the volume is not read |
+| `EF803_FAT_TABLE_READ` | the file allocation table could not be read; the image is truncated inside it |
+| `EF804_FAT_CHAIN` | a cluster chain ends early (a free, bad or out-of-range cluster) or loops; the content read up to there is kept, a directory lists what was read |
+| `EF805_FAT_LFN_MISMATCH` | a long file name's checksum does not match the short entry after it (left by a tool that ignores long names); the 8.3 name is used |
+| `EF806_FAT_DELETED` | deleted directory entries (first byte 0xE5) were found and listed under $DELETED; the message says how many and how many can still be read back |
+| `EF807_FAT_DELETED_REUSED` | a deleted entry's clusters are allocated again: its name, size and times are listed, its content is not read back |
+| `EF808_FAT_DIR_LOOP` | a directory's first cluster is one of its ancestors' (damage or a crafted volume); it was not descended into |
+| `EF809_FAT_LOCAL_TIME` | FAT stores local time without a zone; this volume's times are shown as if they were UTC |
+| `EF810_FAT_READ` | reading clusters failed; the image is truncated or the medium is failing there |
+| `EF820_EXFAT_OPEN` | the volume's boot sector could not be parsed as exFAT: the sector or cluster size, the FAT or cluster heap position or the cluster count is impossible; the partition offset is wrong or the boot sector is damaged (exFAT keeps a backup boot region at sector 12) |
+| `EF821_EXFAT_OPENED` | an exFAT volume was opened: cluster size, clusters, size, label and whether the allocation bitmap was found |
+| `EF822_EXFAT_FAT_READ` | a block of the file allocation table could not be read (the image is truncated inside it): the chains through it end there |
+| `EF823_EXFAT_BITMAP` | the allocation bitmap is missing, larger than 512 MB or unreadable: every cluster is taken as in use, so no deleted file is read back |
+| `EF824_EXFAT_CHAIN` | a cluster chain ends early (a free, bad or out-of-range cluster) or loops: the content read up to there is kept, a directory lists what was read |
+| `EF825_EXFAT_SET_CHECKSUM` | an entry set's checksum does not match its entries (a damaged directory, or a tool that does not update it): the file is still listed |
+| `EF826_EXFAT_SET_BROKEN` | a File entry is not followed by its Stream Extension and File Name entries (a damaged or half-written directory): skipped |
+| `EF827_EXFAT_DELETED` | deleted entry sets (in-use bit cleared) were found and listed under $DELETED: how many, and how many can still be read back |
+| `EF828_EXFAT_DELETED_REUSED` | a deleted file's clusters are in use again: its name, size and times are listed, its content is not read back |
+| `EF829_EXFAT_DIR_LOOP` | a directory's first cluster is one of its ancestors' (damage or a crafted volume): it was not descended into |
+| `EF830_EXFAT_NO_UTC_OFFSET` | entries whose times carry no UTC offset (written by a system that does not set it, as older Linux drivers and some cameras): those times are local time, shown as if UTC |
+| `EF831_EXFAT_READ` | reading clusters failed: the image is truncated or the medium is failing there |
+| `EF832_EXFAT_VALID_LENGTH` | a file's valid data length is shorter than its size (space allocated, not yet written): the bytes past it read as zeros |
 | `EF850_CARVE_EMPTY` | the source has no bytes to scan |
 | `EF851_CARVE_NO_KINDS` | no carve kind was selected; pick at least one of hive, evtx, prefetch, lnk, sqlite, pe, pdf, zip, jpeg, png |
 | `EF852_CARVE_STARTED` | a carve scan started: source size, kinds, threads |
