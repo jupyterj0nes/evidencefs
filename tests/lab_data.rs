@@ -435,3 +435,26 @@ fn uac_tarball_is_read_through_one_decompressed_file() {
 fn rangeforge_linux_triage_is_read_through_one_decompressed_file() {
     compressed_tar_leaves_one_file(r"rangeforge-20261110\LEO-LNX01-triage.tgz", None);
 }
+
+#[test]
+fn rangeforge_vmdk_mounts_the_efi_system_partition() {
+    quiet();
+    let Some(p) = lab(r"rangeforge-20261110\DEV-SRV01-disk\rf-1a1a0fd2c8e-dev-srv01-snap-1794340067-img-1794343164.vmdk") else { return };
+    let opts = OpenOptions { snapshots: false, ..OpenOptions::default() };
+    let ev = Evidence::open(&p, &opts).expect("opens");
+    eprintln!("{}", ev.describe());
+    let efi = ev.mounts.iter().find(|m| m.fs.kind() == FsKind::Fat).expect("the EFI system partition is mounted as FAT");
+    let mut files = Vec::new();
+    evidencefs::fs::walk(efi.fs.as_ref(), "/", &WalkOptions::default(), &mut |e| {
+        if e.kind == evidencefs::EntryKind::File {
+            files.push((e.path.clone(), e.size));
+        }
+        WalkStep::Continue
+    });
+    eprintln!("{} files on {}: {:?}", files.len(), efi.label, files.iter().take(12).collect::<Vec<_>>());
+    let boot = files.iter().find(|(p, _)| p.eq_ignore_ascii_case("/EFI/Microsoft/Boot/bootmgfw.efi")).expect("Windows boot manager on the ESP");
+    let head = efi.fs.read(&boot.0, None, 64 << 20).expect("reads");
+    assert_eq!(head.len() as u64, boot.1);
+    assert_eq!(&head[..2], b"MZ", "a PE image");
+    assert!(files.iter().any(|(p, _)| p.to_ascii_lowercase().ends_with("/bcd")), "the boot configuration store");
+}

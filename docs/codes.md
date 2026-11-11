@@ -94,7 +94,7 @@ Every code evidencefs can record, with what it means and what to do about it. Th
 | `EF259_PART_FALLBACK_OFFSET` | no partition table gave a readable volume; a file system signature was found at a common offset (0, 63 sectors, 1 MB, 2048 sectors) and that volume was added |
 | `EF260_PART_BITLOCKER` | the volume is BitLocker-encrypted (-FVE-FS- signature); it cannot be read without the recovery key, decrypt it first (dislocker, manage-bde) and give the decrypted image |
 | `EF261_PART_LUKS` | the volume is LUKS-encrypted; it cannot be read without the passphrase, open it with cryptsetup and image the mapped device |
-| `EF262_PART_FS_UNSUPPORTED` | the volume holds a file system this crate does not read yet (btrfs, F2FS, APFS, HFS+, exFAT, FAT, ReFS, swap); it is listed but not walked |
+| `EF262_PART_FS_UNSUPPORTED` | the volume holds a file system this crate does not read yet (btrfs, F2FS, APFS, HFS+, exFAT, ReFS, swap); it is listed but not walked |
 | `EF263_PART_FS_UNKNOWN` | the volume holds no file system signature this crate knows; it is listed as unknown and not walked, it may be empty, encrypted with another product, or a raw data partition |
 | `EF264_PART_NONE_READABLE` | no volume of the image can be read (no NTFS, ext, XFS or LVM); the image holds only unsupported, encrypted or empty volumes |
 | `EF265_PART_LISTED` | the partitions of the image, with their kinds, as the table and the signatures gave them |

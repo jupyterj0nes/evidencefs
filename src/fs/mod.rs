@@ -3,6 +3,7 @@
 //! used, so a tool asks for `/Windows/System32/config/SYSTEM` the same way everywhere.
 
 pub mod ext;
+pub mod fat;
 pub mod extjournal;
 pub mod folder;
 pub mod mft;
@@ -51,6 +52,8 @@ pub enum FsKind {
     Zip,
     /// A tar read in place (a compressed one through its single decompressed copy).
     Tar,
+    /// FAT12, FAT16 or FAT32 (the EFI system partition, USB sticks, SD cards).
+    Fat,
 }
 
 impl FsKind {
@@ -63,12 +66,13 @@ impl FsKind {
             FsKind::Folder => "folder",
             FsKind::Zip => "zip",
             FsKind::Tar => "tar",
+            FsKind::Fat => "FAT",
         }
     }
 
     /// Does name lookup ignore case?
     pub fn case_insensitive(&self) -> bool {
-        matches!(self, FsKind::Ntfs | FsKind::Zip | FsKind::Folder | FsKind::Tar)
+        matches!(self, FsKind::Ntfs | FsKind::Zip | FsKind::Folder | FsKind::Tar | FsKind::Fat)
     }
 }
 

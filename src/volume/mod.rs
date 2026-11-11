@@ -23,7 +23,7 @@ pub mod code {
         PART_FALLBACK_OFFSET = 259, "no partition table gave a readable volume; a file system signature was found at a common offset (0, 63 sectors, 1 MB, 2048 sectors) and that volume was added";
         PART_BITLOCKER = 260, "the volume is BitLocker-encrypted (-FVE-FS- signature); it cannot be read without the recovery key, decrypt it first (dislocker, manage-bde) and give the decrypted image";
         PART_LUKS = 261, "the volume is LUKS-encrypted; it cannot be read without the passphrase, open it with cryptsetup and image the mapped device";
-        PART_FS_UNSUPPORTED = 262, "the volume holds a file system this crate does not read yet (btrfs, F2FS, APFS, HFS+, exFAT, FAT, ReFS, swap); it is listed but not walked";
+        PART_FS_UNSUPPORTED = 262, "the volume holds a file system this crate does not read yet (btrfs, F2FS, APFS, HFS+, exFAT, ReFS, swap); it is listed but not walked";
         PART_FS_UNKNOWN = 263, "the volume holds no file system signature this crate knows; it is listed as unknown and not walked, it may be empty, encrypted with another product, or a raw data partition";
         PART_NONE_READABLE = 264, "no volume of the image can be read (no NTFS, ext, XFS or LVM); the image holds only unsupported, encrypted or empty volumes";
         PART_LISTED = 265, "the partitions of the image, with their kinds, as the table and the signatures gave them";
@@ -90,7 +90,7 @@ impl VolumeKind {
 
     /// File systems this crate walks (LVM is a container of them).
     pub fn is_readable(&self) -> bool {
-        matches!(self, VolumeKind::Ntfs | VolumeKind::Ext | VolumeKind::Xfs | VolumeKind::Lvm)
+        matches!(self, VolumeKind::Ntfs | VolumeKind::Ext | VolumeKind::Xfs | VolumeKind::Lvm | VolumeKind::Fat)
     }
 
     /// Encrypted: listed, never read.
@@ -580,7 +580,7 @@ pub(crate) mod tests {
         let mut img = blank(300);
         img[0x52..0x57].copy_from_slice(b"FAT32");
         assert_eq!(sniff(&SharedReader::from_bytes(img), 0), VolumeKind::Fat);
-        assert!(VolumeKind::Lvm.is_readable() && !VolumeKind::Fat.is_readable());
+        assert!(VolumeKind::Lvm.is_readable() && VolumeKind::Fat.is_readable() && !VolumeKind::ExFat.is_readable());
         assert!(VolumeKind::Luks.is_encrypted() && !VolumeKind::Ntfs.is_encrypted());
         assert_eq!(VolumeKind::Ext.label(), "ext2/3/4");
     }
@@ -671,7 +671,7 @@ pub(crate) mod tests {
         assert_eq!(vols[1].table, Table::Gpt);
         assert_eq!(vols[2].kind, VolumeKind::Lvm);
         assert_eq!(vols[2].name, None);
-        assert!(crate::diag::has(code::PART_FS_UNSUPPORTED), "FAT is listed as unsupported");
+        assert!(!crate::diag::has(code::PART_FS_UNSUPPORTED), "FAT is read now");
     }
 
     #[test]
